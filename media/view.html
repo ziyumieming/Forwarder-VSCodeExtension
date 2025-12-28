@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src {{cspSource}}; script-src {{cspSource}};">
+    <link rel="stylesheet" href="{{styleUri}}">
+    <title>函数总结分析</title>
+</head>
+
+<body>
+    <div class="main-container">
+        <!-- Header Section: 状态区 -->
+        <section id="header-section" class="header-section">
+            <div class="header-content">
+                <div class="status-icon" id="status-icon">🔍</div>
+                <div class="header-text">
+                    <span class="status-label">当前分析函数</span>
+                    <h2 id="func-name" class="func-name">myFunction</h2>
+                    <span class="status-text" id="status-text">正在分析...</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Content Section: 核心区 -->
+        <section id="content-section" class="content-section">
+            <div class="section-header">
+                <span class="section-title">AI 总结</span>
+            </div>
+            <div id="summary-content" class="summary-card">
+                <p>加载中，请稍候...</p>
+            </div>
+        </section>
+
+
+        <!-- Action Section: 操作区 -->
+        <section id="action-section" class="action-section">
+            <button id="jump-btn" class="btn btn-primary" title="点击跳转到源代码">
+                <!-- <span class="btn-icon">📄</span> -->
+                <span class="btn-text">定位到源码</span>
+            </button>
+            <button id="regenerate-btn" class="btn btn-secondary" title="重新生成总结">
+                <!-- <span class="btn-icon">🔄</span> -->
+                <span class="btn-text">重新生成</span>
+            </button>
+            <button id="copy-btn" class="btn btn-secondary" title="复制总结内容">
+                <!-- <span class="btn-icon">📋</span> -->
+                <span class="btn-text">复制总结内容</span>
+            </button>
+        </section>
+
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="loading-overlay hidden">
+            <div class="spinner"></div>
+            <p>分析中...</p>
+        </div>
+    </div>
+
+    <script src="{{scriptUri}}"></script>
+</body>
+
+</html>

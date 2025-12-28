@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class ForwarderWebviewProvider implements vscode.WebviewViewProvider {
     // 单例，方便我们在外面通过这个变量发消息给 Webview
@@ -16,6 +18,13 @@ export class ForwarderWebviewProvider implements vscode.WebviewViewProvider {
         };
 
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+        // 监听来自 Webview 的按钮点击
+        webviewView.webview.onDidReceiveMessage(data => {
+            if (data.command === 'jumpToFunction') {
+                // 这里后面会调用编辑器定位逻辑
+                vscode.window.showInformationMessage("准备跳回函数位置...");
+            }
+        });
     }
 
 
@@ -26,29 +35,20 @@ export class ForwarderWebviewProvider implements vscode.WebviewViewProvider {
     }
 
     private _getHtmlForWebview(webview: vscode.Webview) {
-        return `
-            <!DOCTYPE html>
-            <html lang="en">
-            <body>
-                <h3 id="status">等待分析...</h3>
-                <div id="content"></div>
-                <button id="locate-btn" style="display:none;">定位到函数</button>
-                <script>
-                    const vscode = acquireVsCodeApi();
-                    window.addEventListener('message', event => {
-                        const message = event.data;
-                        if (message.type === 'update') {
-                            document.getElementById('status').innerText = '功能总结：';
-                            document.getElementById('content').innerText = message.text;
-                            document.getElementById('locate-btn').style.display = 'block';
-                        }
-                    });
+        // 获取本地资源的路径
+        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'main.js'));
+        const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'main.css'));
+        const htmlPath = vscode.Uri.joinPath(this._extensionUri, 'media', 'view.html');
 
-                    document.getElementById('locate-btn').onclick = () => {
-                        vscode.postMessage({ command: 'reFocus' });
-                    };
-                </script>
-            </body>
-            </html>`;
+        // 读取 HTML 文件内容
+        let html = fs.readFileSync(htmlPath.fsPath, 'utf8');
+
+        // 动态替换占位符
+        html = html
+            .replace('{{cspSource}}', webview.cspSource)
+            .replace('{{styleUri}}', styleUri.toString())
+            .replace('{{scriptUri}}', scriptUri.toString());
+
+        return html;
     }
 }
