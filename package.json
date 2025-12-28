@@ -4,7 +4,7 @@
   "description": "Design of VSCode Intelligent Visual Analysis Plugin for Code Understanding",
   "version": "0.0.1",
   "engines": {
-    "vscode": "^1.107.0"
+    "vscode": "^1.107.1"
   },
   "categories": [
     "Other"
@@ -14,8 +14,49 @@
   "contributes": {
     "commands": [
       {
-        "command": "forwarder.helloWorld",
-        "title": "Hello World"
+        "command": "forwarder.getFunction",
+        "title": "Go Forwarder"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "forwarder-sidebar",
+          "title": "Forwarder代码总结",
+          "icon": "$(pulse)"
+        }
+      ]
+    },
+    "views": {
+      "forwarder-sidebar": [
+        {
+          "type": "webview",
+          "id": "forwarder-view",
+          "name": "土豆爆炸",
+          "icon": "media/Rust.ico"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "when": "editorHasSelection",
+          "command": "forwarder.getFunction",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "forwarder.getFunction",
+        "key": "ctrl+alt+f",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "workbench.view.extension.forwarder-sidebar",
+        "key": "ctrl+shift+f",
+        "mac": "cmd+shift+f",
+        "when": "focusContextKey"
       }
     ]
   },
