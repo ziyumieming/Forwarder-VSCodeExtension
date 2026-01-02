@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { ForwarderWebviewProvider } from '../providers/summaryview';
 import { LSPService, FunctionInfo } from '../services/LSPservices';
 import { logger } from '../utils/logger';
+import { LLMService } from '../services/LLMservices';
 
 export class SummaryController {
     private lastFuncInfo?: FunctionInfo; // 记录上次分析的函数信息
@@ -45,11 +46,16 @@ export class SummaryController {
 
         this.lastFuncInfo = funcInfo;
         vscode.window.showInformationMessage(`识别到函数: ${funcInfo.name}`);
-        logger.info(`函数 ${funcInfo.name} 的代码内容为:\n${funcInfo.code} `);
+        logger.info(`[Controller] 识别到函数: ${funcInfo.name}`);
+        // logger.info(`函数 ${funcInfo.name} 的代码内容为:\n${funcInfo.code} `);
+
+        const summary = await LLMService.summarizeFunction(funcInfo.name, funcInfo.code);
+
         this.provider.updateState({
             status: 'success',
             functionName: funcInfo.name,
-            summary: `函数 ${funcInfo.name} 的代码内容为:\n${funcInfo.code} `
+            // summary: `#### 函数 ${funcInfo.name} 的代码内容为: \n${funcInfo.code}\n`
+            summary: summary
         });
     }
 

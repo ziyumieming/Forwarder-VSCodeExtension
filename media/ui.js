@@ -76,5 +76,6 @@ function updateSummary(name, summary) {
     state.currentFunction = name;
     elements.funcName.textContent = name;
     state.summary = summary;
-    elements.summaryContent.textContent = summary;
+    const markdown = marked.parse(summary);
+    elements.summaryContent.innerHTML = markdown;
 }

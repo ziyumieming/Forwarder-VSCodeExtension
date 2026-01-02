@@ -39,6 +39,7 @@ export class ForwarderWebviewProvider implements vscode.WebviewViewProvider {
         const htmlPath = vscode.Uri.joinPath(this._extensionUri, 'media', 'view.html');
         const uiScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'ui.js'));
         const mockScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'mock.js'));
+        const markdownScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'marked.min.js'));
         // 读取 HTML 文件内容
         let html = fs.readFileSync(htmlPath.fsPath, 'utf8');
 
@@ -49,7 +50,8 @@ export class ForwarderWebviewProvider implements vscode.WebviewViewProvider {
             .replace(/{{styleUri}}/g, styleUri.toString())
             .replace(/{{scriptUri}}/g, scriptUri.toString())
             .replace(/{{uiScriptUri}}/g, uiScriptUri.toString())
-            .replace(/{{mockScriptUri}}/g, mockScriptUri.toString());
+            .replace(/{{mockScriptUri}}/g, mockScriptUri.toString())
+            .replace(/{{markdownScriptUri}}/g, markdownScriptUri.toString());
 
         return html;
     }
