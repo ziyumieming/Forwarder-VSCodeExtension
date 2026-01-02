@@ -35,19 +35,24 @@ export class ForwarderWebviewProvider implements vscode.WebviewViewProvider {
     }
 
     private _getHtmlForWebview(webview: vscode.Webview) {
+        const useMock = true;
         // 获取本地资源的路径
         const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'main.js'));
         const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'main.css'));
         const htmlPath = vscode.Uri.joinPath(this._extensionUri, 'media', 'view.html');
-
+        const uiScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'ui.js'));
+        const mockScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'mock.js'));
         // 读取 HTML 文件内容
         let html = fs.readFileSync(htmlPath.fsPath, 'utf8');
 
         // 动态替换占位符
         html = html
-            .replace('{{cspSource}}', webview.cspSource)
-            .replace('{{styleUri}}', styleUri.toString())
-            .replace('{{scriptUri}}', scriptUri.toString());
+            .replace(/{{ useMock }}/g, useMock ? 'true' : 'false')
+            .replace(/{{cspSource}}/g, webview.cspSource)
+            .replace(/{{styleUri}}/g, styleUri.toString())
+            .replace(/{{scriptUri}}/g, scriptUri.toString())
+            .replace(/{{uiScriptUri}}/g, uiScriptUri.toString())
+            .replace(/{{mockScriptUri}}/g, mockScriptUri.toString());
 
         return html;
     }

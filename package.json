@@ -40,7 +40,7 @@
     "menus": {
       "editor/context": [
         {
-          "when": "editorHasSelection",
+          "when": "editorTextFocus",
           "command": "forwarder.getFunction",
           "group": "navigation"
         }

@@ -1,0 +1,61 @@
+import * as vscode from 'vscode';
+import { logger } from '../utils/logger';
+
+export interface FunctionInfo {
+    name: string;
+    code: string;// 函数的完整代码文本
+    range: vscode.Range;
+}
+
+export class LSPService {
+
+    // 根据当前光标位置自动寻找并获取函数信息
+    public static async getActiveFunction(): Promise<FunctionInfo | undefined> {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            logger.info('[LSPService] 没有 activeTextEditor');
+            return undefined;
+        }
+        logger.info(`[LSPService] 当前文档: ${editor.document.uri.toString()}`);
+
+        const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+            'vscode.executeDocumentSymbolProvider',
+            editor.document.uri
+        );
+        if (!symbols) {
+            logger.info('[LSPService] executeDocumentSymbolProvider 返回空');
+            return undefined;
+        }
+        // 递归寻找包含当前光标的最深层符号（通常就是函数/方法）
+        const cursor = editor.selection.active;
+        logger.info(`[LSPService] 光标位置: (${cursor.line}, ${cursor.character})`);
+        const targetSymbol = this._findSymbolAtPosition(symbols, cursor);
+        logger.info('[LSPService] 命中的符号: ' + (targetSymbol
+            ? `${targetSymbol.name} [${vscode.SymbolKind[targetSymbol.kind]}] ${targetSymbol.range.start.line}-${targetSymbol.range.end.line}`
+            : '无'));
+        if (targetSymbol && (targetSymbol.kind === vscode.SymbolKind.Function || targetSymbol.kind === vscode.SymbolKind.Method)) {
+            return {
+                name: targetSymbol.name,
+                code: editor.document.getText(targetSymbol.range),
+                range: targetSymbol.range
+            };
+        }
+        logger.info('[LSPService] 找到的符号不是函数/方法，返回 undefined');
+        return undefined;
+    }
+
+    // 在符号树中搜索包含特定位置的符号
+    private static _findSymbolAtPosition(symbols: vscode.DocumentSymbol[], pos: vscode.Position): vscode.DocumentSymbol | undefined {
+        for (const symbol of symbols) {
+            if (symbol.range.contains(pos)) {
+                // 如果该符号有子符号，递归向深层找（例如类里的方法）
+                if (symbol.children && symbol.children.length > 0) {
+                    const child = this._findSymbolAtPosition(symbol.children, pos);
+                    if (child) return child;
+                }
+                return symbol;
+            }
+        }
+        return undefined;
+    }
+}
