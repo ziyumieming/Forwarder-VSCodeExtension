@@ -1,12 +1,18 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { logger } from '../utils/logger';
 
 export class ForwarderWebviewProvider implements vscode.WebviewViewProvider {
     // 单例，方便我们在外面通过这个变量发消息给 Webview
     private _view?: vscode.WebviewView;
+    private _messageHandler?: (data: any) => void;//消息回调，将 resolveWebviewView 监听到的消息转发给上层controller
 
     constructor(private readonly _extensionUri: vscode.Uri) { }
+
+    public setMessageHandler(handler: (data: any) => void) {
+        this._messageHandler = handler;
+    }
 
     // 当用户点开侧边栏时，VSCode 会调用这个方法
     resolveWebviewView(webviewView: vscode.WebviewView) {
@@ -19,23 +25,14 @@ export class ForwarderWebviewProvider implements vscode.WebviewViewProvider {
 
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
         // 监听来自 Webview 的按钮点击
-        webviewView.webview.onDidReceiveMessage(data => {
-            if (data.command === 'jumpToFunction') {
-                // 这里后面会调用编辑器定位逻辑
-                vscode.window.showInformationMessage("准备跳回函数位置...");
-            }
-        });
-    }
-
-
-    public updateSummary(summary: string) {
-        if (this._view) {
-            this._view.webview.postMessage({ type: 'update', text: summary });
-        }
+        webviewView.webview.onDidReceiveMessage(async data => {
+            logger.info(`[Webview] 收到消息: ${JSON.stringify(data)}`);
+            this._messageHandler?.(data);
+        })
     }
 
     private _getHtmlForWebview(webview: vscode.Webview) {
-        const useMock = true;
+        const useMock = false;
         // 获取本地资源的路径
         const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'main.js'));
         const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'main.css'));
@@ -56,4 +53,13 @@ export class ForwarderWebviewProvider implements vscode.WebviewViewProvider {
 
         return html;
     }
+
+
+    public updateState(partial: { status?: string; functionName?: string; summary?: string }) {
+        this._view?.webview.postMessage({
+            command: 'updateState',
+            content: partial
+        });
+    }
+
 }

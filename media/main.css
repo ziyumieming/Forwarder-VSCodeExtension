@@ -105,7 +105,7 @@ body {
 }
 
 .status-label {
-    font-size: 12px;
+    font-size: 16px;
     color: var(--color-text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -158,6 +158,8 @@ body {
     max-height: 400px;
     overflow-y: auto;
     box-shadow: inset 0 1px 3px var(--color-shadow);
+    white-space: pre-wrap;
+    /* 保持换行和空格 */
 }
 
 .summary-card p {

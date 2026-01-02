@@ -1,8 +1,11 @@
+
+const vscode = acquireVsCodeApi();
+
 // ==================== Mock Functions for Demo ==================== //
 function startMockAnalysis() {
     updateStatus('analyzing');
     setButtonsDisabled(true);
-    showLoadingOverlay(true);
+
 
     // 演示：3秒后完成分析
     setTimeout(() => {
@@ -28,12 +31,12 @@ function startMockAnalysis() {
 
         updateSummary(mockSummary);
         updateStatus('success');
-        setButtonsDisabled(false);
-        showLoadingOverlay(false);
     }, 3000);
 }
 
 // ==================== Real Analysis ==================== //
 function startRealAnalysis() {
-
+    // 本地先切到“分析中”状态，再通知扩展去做真正的分析
+    updateStatus('analyzing');
+    vscode.postMessage({ command: 'regenerate' });
 }

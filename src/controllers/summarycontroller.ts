@@ -4,12 +4,13 @@ import { LSPService, FunctionInfo } from '../services/LSPservices';
 import { logger } from '../utils/logger';
 
 export class SummaryController {
-    // 依赖通过构造函数注入
-    constructor(
-        private readonly provider: ForwarderWebviewProvider
-    ) { }
+    private lastFuncInfo?: FunctionInfo; // 记录上次分析的函数信息
 
-    handleGetFunctionCommand() {
+    constructor(private readonly provider: ForwarderWebviewProvider) {
+        this.provider.setMessageHandler(this.handleWebviewMessage.bind(this));
+    }
+
+    private async runAnalysisForActiveFunction() {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
             return;
@@ -29,17 +30,60 @@ export class SummaryController {
                 vscode.commands.executeCommand('forwarder-view.focus');
                 this.provider.updateSummary(`选中的代码长度为 ${text.length} 个字符。`);
             */
-        const func = LSPService.getActiveFunction();
-        func.then((funcInfo: FunctionInfo | undefined) => {
-            if (!funcInfo) {
-                vscode.window.showWarningMessage("未能识别当前光标所在的函数。");
-                return;
-            }
-            vscode.window.showInformationMessage(`识别到函数: ${funcInfo.name}`);
-            logger.info(`函数 ${funcInfo.name} 的代码内容为:\n${funcInfo.code} `);
-            vscode.commands.executeCommand('forwarder-view.focus');
-            this.provider.updateSummary(`函数 ${funcInfo.name} 的代码内容为:\n${funcInfo.code} `);
-        });
+        const funcInfo = await LSPService.getActiveFunction();
 
+        if (!funcInfo) {
+            vscode.window.showWarningMessage("未能识别当前光标所在的函数。");
+            this.provider.updateState({
+                status: 'error',
+                functionName: '',
+                summary: '未能识别当前光标所在的函数。'
+            });
+            return;
+        }
+        await vscode.commands.executeCommand('forwarder-view.focus');
+
+        this.lastFuncInfo = funcInfo;
+        vscode.window.showInformationMessage(`识别到函数: ${funcInfo.name}`);
+        logger.info(`函数 ${funcInfo.name} 的代码内容为:\n${funcInfo.code} `);
+        this.provider.updateState({
+            status: 'success',
+            functionName: funcInfo.name,
+            summary: `函数 ${funcInfo.name} 的代码内容为:\n${funcInfo.code} `
+        });
+    }
+
+    private async jumpToLastFunction() {
+        if (!this.lastFuncInfo) {
+            vscode.window.showWarningMessage("当前没有可跳转的函数信息，请先运行一次分析。");
+            return;
+        }
+
+        const doc = await vscode.workspace.openTextDocument(this.lastFuncInfo.uri);
+        const editor = await vscode.window.showTextDocument(doc, { preview: false });
+
+        editor.revealRange(this.lastFuncInfo.range, vscode.TextEditorRevealType.InCenter);
+        editor.selection = new vscode.Selection(
+            this.lastFuncInfo.range.start,
+            this.lastFuncInfo.range.start
+        );
+    }
+
+    public handleGetFunctionCommand() {
+        this.runAnalysisForActiveFunction();
+    }
+
+    private async handleWebviewMessage(data: any) {
+        switch (data.command) {
+            case 'regenerate':
+                logger.info('[Controller] 收到 Webview regenerate 请求');
+                await this.runAnalysisForActiveFunction();
+                break;
+
+            case 'jumpToSource':
+                logger.info(`[Controller] 收到 jumpToSource，函数名: ${data.functionName}`);
+                await this.jumpToLastFunction();
+                break;
+        }
     }
 }

@@ -5,6 +5,7 @@ export interface FunctionInfo {
     name: string;
     code: string;// 函数的完整代码文本
     range: vscode.Range;
+    uri: vscode.Uri;
 }
 
 export class LSPService {
@@ -37,7 +38,8 @@ export class LSPService {
             return {
                 name: targetSymbol.name,
                 code: editor.document.getText(targetSymbol.range),
-                range: targetSymbol.range
+                range: targetSymbol.range,
+                uri: editor.document.uri
             };
         }
         logger.info('[LSPService] 找到的符号不是函数/方法，返回 undefined');

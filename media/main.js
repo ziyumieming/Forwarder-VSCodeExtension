@@ -4,24 +4,17 @@ const useMock = document.body.dataset.useMock === 'true';
 // ==================== Event Handlers ==================== //
 elements.jumpBtn.addEventListener('click', () => {
     console.log('Jump to source code:', state.currentFunction);
-    // TODO: 调用VSCode API跳转到源代码
-    // 示例: vscode.postMessage({ command: 'jumpToSource', functionName: state.currentFunction });
-
-    // 演示效果
+    vscode.postMessage({ command: 'jumpToSource', functionName: state.currentFunction });
     showNotification('已定位到源代码位置', 'success');
 });
 
 elements.regenerateBtn.addEventListener('click', () => {
     if (!state.isAnalyzing) {
         console.log('Regenerate summary for:', state.currentFunction);
-        // TODO: 调用API重新生成总结
-        // 示例: vscode.postMessage({ command: 'regenerate', functionName: state.currentFunction });
-
         if (useMock)
             startMockAnalysis();
         else
             startRealAnalysis();
-
     }
 });
 
@@ -52,16 +45,8 @@ elements.copyBtn.addEventListener('click', () => {
 // ==================== Initialize ==================== //
 function initializeUI() {
     console.log('UI Initialized');
-
-    // 设置初始状态
     updateStatus('success');
     updateFunctionName('Forwarder');
-
-    // 设置初始总结内容
-    const initialSummary = `
-        <p>欢迎使用函数总结分析工具！</p>
-        <p>点击 <strong>"重新生成"</strong> 按钮开始分析当前选中的函数。</p>
-    `;
     updateSummary(initialSummary);
 }
 
@@ -76,17 +61,14 @@ if (document.readyState === 'loading') {
 // 监听来自VSCode的消息
 window.addEventListener('message', event => {
     const message = event.data;
-
+    const content = message.content;
     switch (message.command) {
-        case 'updateFunctionName':
-            updateFunctionName(message.functionName);
+        case 'updateState': {
+            const { status, functionName, summary } = message.content || {};
+            if (status) updateStatus(status);
+            if (functionName && summary) updateSummary(functionName, summary);
             break;
-        case 'updateSummary':
-            updateSummary(message.summary);
-            break;
-        case 'setStatus':
-            updateStatus(message.status);
-            break;
+        }
     }
 });
 
