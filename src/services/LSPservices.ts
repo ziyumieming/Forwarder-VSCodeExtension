@@ -10,6 +10,19 @@ export interface FunctionInfo {
 
 export class LSPService {
 
+    // 获取整个文档的符号树
+    public static async getDocumentSymbols(uri: vscode.Uri): Promise<vscode.DocumentSymbol[] | undefined> {
+        try {
+            return await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+                'vscode.executeDocumentSymbolProvider',
+                uri
+            );
+        } catch (err) {
+            logger.info(`[LSPService] 获取文档符号失败: ${uri.toString()}`);
+            return undefined;
+        }
+    }
+
     // 根据当前光标位置自动寻找并获取函数信息
     public static async getActiveFunction(): Promise<FunctionInfo | undefined> {
         const editor = vscode.window.activeTextEditor;

@@ -34,12 +34,12 @@ export class ForwarderWebviewProvider implements vscode.WebviewViewProvider {
     private _getHtmlForWebview(webview: vscode.Webview) {
         const useMock = false;
         // 获取本地资源的路径
-        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'main.js'));
-        const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'main.css'));
-        const htmlPath = vscode.Uri.joinPath(this._extensionUri, 'media', 'view.html');
-        const uiScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'ui.js'));
-        const mockScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'mock.js'));
-        const markdownScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'marked.min.js'));
+        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'initial', 'main.js'));
+        const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'initial', 'main.css'));
+        const htmlPath = vscode.Uri.joinPath(this._extensionUri, 'media', 'initial', 'view.html');
+        const uiScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'initial', 'ui.js'));
+        const mockScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'initial', 'mock.js'));
+        const markdownScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'initial', 'marked.min.js'));
         // 读取 HTML 文件内容
         let html = fs.readFileSync(htmlPath.fsPath, 'utf8');
 

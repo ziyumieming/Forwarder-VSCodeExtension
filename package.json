@@ -16,6 +16,10 @@
       {
         "command": "forwarder.getFunction",
         "title": "Go Forwarder"
+      },
+      {
+        "command": "forwarder.debug.analyzeFile",
+        "title": "Debug: 检验流程通行性"
       }
     ],
     "viewsContainers": {
