@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ProjectGraph } from '../models/graphmanager';
-import { GraphService } from '../services/graphservices';
+import { AdapterService } from '../services/adapterservices';
 import { logger } from '../utils/logger';
 
 export class AnalysisController {
@@ -20,7 +20,7 @@ export class AnalysisController {
 
         try {
             // 1. 调用图服务，从LSP提取并组装指定文件的 IRNode 与内部关系边界
-            const payload = await GraphService.extractFileSymbols(uri);
+            const payload = await AdapterService.extractFileSymbols(uri);
 
             if (!payload || payload.nodes.length === 0) {
                 logger.info(`[AnalysisController] 未能从 ${uri.fsPath} 提取到结构信息或文件为空。`);
@@ -38,7 +38,7 @@ export class AnalysisController {
     }
 
     /**
-     * 测试入口：对用户当前打开/激活的文件执行图分析收集
+     * 入口：对用户当前打开/激活的文件执行图分析收集
      */
     public async analyzeActiveFile(): Promise<void> {
         const editor = vscode.window.activeTextEditor;
@@ -48,5 +48,12 @@ export class AnalysisController {
         } else {
             vscode.window.showWarningMessage("未检测到活跃的编辑器文件。");
         }
+    }
+
+    /**
+     * 命令处理器：供快捷键和菜单绑定
+     */
+    public handleAnalyzeActiveFileCommand(): void {
+        this.analyzeActiveFile();
     }
 }

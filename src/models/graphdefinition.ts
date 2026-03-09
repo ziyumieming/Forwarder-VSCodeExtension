@@ -14,6 +14,7 @@ export interface IRNode {
         uri: string;
         range: { start: LineCol; end: LineCol };
     };
+    placeHolder?: boolean;    // 是否为占位节点（外部文件临时添加）
 
     // 节点类型特定的补充信息
     namespace?: string;     // 如类/接口的命名空间

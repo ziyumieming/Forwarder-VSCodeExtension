@@ -28,7 +28,7 @@ export class ForwarderWebviewProvider implements vscode.WebviewViewProvider {
         webviewView.webview.onDidReceiveMessage(async data => {
             logger.info(`[Webview] 收到消息: ${JSON.stringify(data)}`);
             this._messageHandler?.(data);
-        })
+        });
     }
 
     private _getHtmlForWebview(webview: vscode.Webview) {

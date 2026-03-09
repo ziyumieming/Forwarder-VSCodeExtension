@@ -18,6 +18,10 @@
         "title": "Go Forwarder"
       },
       {
+        "command": "forwarder.analyzeActiveFile",
+        "title": "Analyze: 分析当前文件代码结构"
+      },
+      {
         "command": "forwarder.debug.analyzeFile",
         "title": "Debug: 检验流程通行性"
       }
@@ -47,6 +51,11 @@
           "when": "editorTextFocus",
           "command": "forwarder.getFunction",
           "group": "navigation"
+        },
+        {
+          "when": "editorTextFocus",
+          "command": "forwarder.analyzeActiveFile",
+          "group": "navigation"
         }
       ]
     },
@@ -54,6 +63,11 @@
       {
         "command": "forwarder.getFunction",
         "key": "ctrl+alt+f",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "forwarder.analyzeActiveFile",
+        "key": "ctrl+alt+a",
         "when": "editorTextFocus"
       },
       {

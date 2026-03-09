@@ -42,7 +42,14 @@ export class ProjectGraph {
      * 添加或覆盖节点
      */
     private _addNode(node: IRNode): void {
-        this.nodes.set(node.id, node);// TODO: 此处为全量覆盖，未来可改为增量更新（仅当节点已存在时才覆盖特定字段）
+        const existing = this.nodes.get(node.id);
+        if (existing) {
+            // 如果已存在且不是占位节点，而新传入的却是占位节点，那就不覆盖
+            if (!existing.placeHolder && node.placeHolder) {
+                return;
+            }
+        }
+        this.nodes.set(node.id, node);
     }
 
     /**
