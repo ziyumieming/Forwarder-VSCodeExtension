@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../utils/logger';
 
-export class ForwarderWebviewProvider implements vscode.WebviewViewProvider {
+export class SummaryViewProvider implements vscode.WebviewViewProvider {
     // 单例，方便我们在外面通过这个变量发消息给 Webview
     private _view?: vscode.WebviewView;
     private _messageHandler?: (data: any) => void;//消息回调，将 resolveWebviewView 监听到的消息转发给上层controller

@@ -1,4 +1,4 @@
-import { IRNode, EdgeRelation, AdjacencyMap, EdgeData } from "./graphdefinition";
+import { IRNode, EdgeRelation, AdjacencyMap, EdgeData } from "./GraphDefinition";
 
 export interface FileSymbolsPayload {
     uri: string;
@@ -21,7 +21,7 @@ export class ProjectGraph {
      * @param payload 包含文件URI及其内部结构解析结果（节点与边）
      */
     public updateFileSymbols(payload: FileSymbolsPayload): void {
-        // 当前侧重于新增逻辑，未来为了支持“更新”，可以在此处先根据 payload.uri 查出并清理旧节点和边
+        // TODO: 当前侧重于新增逻辑，未来为了支持“更新”，可以在此处先根据 payload.uri 查出并清理旧节点和边
 
         // 1. 添加/更新节点
         for (const node of payload.nodes) {
@@ -35,7 +35,69 @@ export class ProjectGraph {
     }
 
     // ==========================================
-    // 图数据结构原子操作：内部原子方法
+    // 图数据结构查询操作：提供视图查询支持
+    // ==========================================
+
+    public getNode(id: string): IRNode | undefined {
+        return this.nodes.get(id);
+    }
+
+    public getNodes(ids: Iterable<string>): IRNode[] {
+        const result: IRNode[] = [];
+        for (const id of ids) {
+            const node = this.nodes.get(id);
+            if (node) {
+                result.push(node);
+            }
+        }
+        return result;
+    }
+
+    public getAllEdgesByRelation(relation: EdgeRelation): EdgeData[] {
+        const edges: EdgeData[] = [];
+        for (const [sourceId, relations] of this.outEdges.entries()) {
+            const targetSet = relations.get(relation);
+            if (targetSet) {
+                for (const targetId of targetSet) {
+                    edges.push({ sourceId, targetId, relation });
+                }
+            }
+        }
+        return edges;
+    }
+
+    public getRelatedEdges(nodeId: string, allowedRelations?: EdgeRelation[]): EdgeData[] {
+        const edges: EdgeData[] = [];
+
+        // 查出边
+        const outRels = this.outEdges.get(nodeId);
+        if (outRels) {
+            for (const [rel, targets] of outRels.entries()) {
+                if (!allowedRelations || allowedRelations.includes(rel)) {
+                    for (const targetId of targets) {
+                        edges.push({ sourceId: nodeId, targetId, relation: rel });
+                    }
+                }
+            }
+        }
+
+        // 查入边
+        const inRels = this.inEdges.get(nodeId);
+        if (inRels) {
+            for (const [rel, sources] of inRels.entries()) {
+                if (!allowedRelations || allowedRelations.includes(rel)) {
+                    for (const sourceId of sources) {
+                        edges.push({ sourceId, targetId: nodeId, relation: rel });
+                    }
+                }
+            }
+        }
+
+        return edges;
+    }
+
+    // ==========================================
+    // 图数据结构维护操作：供适配层调用
     // ==========================================
 
     /**

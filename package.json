@@ -14,15 +14,15 @@
   "contributes": {
     "commands": [
       {
-        "command": "forwarder.getFunction",
+        "command": "forwarder.analyze0",
         "title": "Go Forwarder"
       },
       {
-        "command": "forwarder.analyzeActiveFile",
+        "command": "forwarder.analyze",
         "title": "Analyze: 分析当前文件代码结构"
       },
       {
-        "command": "forwarder.debug.analyzeFile",
+        "command": "forwarder.debug.analyze",
         "title": "Debug: 检验流程通行性"
       }
     ],
@@ -49,12 +49,12 @@
       "editor/context": [
         {
           "when": "editorTextFocus",
-          "command": "forwarder.getFunction",
+          "command": "forwarder.analyze0",
           "group": "navigation"
         },
         {
           "when": "editorTextFocus",
-          "command": "forwarder.analyzeActiveFile",
+          "command": "forwarder.analyze",
           "group": "navigation"
         }
       ]
@@ -66,7 +66,7 @@
         "when": "editorTextFocus"
       },
       {
-        "command": "forwarder.analyzeActiveFile",
+        "command": "forwarder.analyze",
         "key": "ctrl+alt+a",
         "when": "editorTextFocus"
       },

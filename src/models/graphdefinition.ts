@@ -39,3 +39,7 @@ export interface EdgeData {
 // 多维邻接表别名；边的定义被嵌入Map数据结构中。
 export type AdjacencyMap = Map<string, Map<EdgeRelation, Set<string>>>;
 
+export interface GraphViewData {
+    nodes: IRNode[];
+    edges: EdgeData[];
+}

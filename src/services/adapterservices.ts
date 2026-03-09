@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import { IRNode, NodeType, EdgeRelation, EdgeData } from '../models/graphdefinition';
-import { FileSymbolsPayload } from '../models/graphmanager';
-import { LSPService } from './LSPservices';
+import { IRNode, NodeType, EdgeRelation, EdgeData } from '../models/GraphDefinition';
+import { FileSymbolsPayload } from '../models/GraphManager';
+import { LSPService } from './LSPServices';
 
 export class AdapterService {
     /**
@@ -118,7 +118,7 @@ export class AdapterService {
                             const targetUri = 'uri' in def ? def.uri : def.targetUri;
                             const targetRange = 'range' in def ? def.range : def.targetSelectionRange;
 
-                            // 检查targetRange是否有效
+                            // TODO: targetRange是做什么的？
                             if (!targetRange) {
                                 continue;
                             }

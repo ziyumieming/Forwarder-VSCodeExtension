@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
-import { ForwarderWebviewProvider } from './providers/summaryview';
-import { SummaryController } from './controllers/summarycontroller';
-import { AnalysisController } from './controllers/analysiscontroller';
-import { DebugController } from './controllers/debugcontroller';
+import { SummaryViewProvider } from './providers/SummaryView';
+import { AnalysisViewProvider } from './providers/AnalysisView';
+import { SummaryController } from './controllers/SummaryController';
+import { AnalysisController } from './controllers/AnalysisController';
+import { DebugController } from './controllers/DebugController';
 import { logger } from './utils/logger';
 
 
@@ -10,23 +11,18 @@ export function activate(context: vscode.ExtensionContext) {
 
 	logger.info("I'm here testing the extension's availability.");
 
-	const provider = new ForwarderWebviewProvider(context.extensionUri);
-	const summaryController = new SummaryController(provider);
-	const analysisController = new AnalysisController();
+	const summaryProvider = new SummaryViewProvider(context.extensionUri);
+	const analysisProvider = new AnalysisViewProvider(context.extensionUri);
+	const summaryController = new SummaryController(summaryProvider);//已废弃
+	const analysisController = new AnalysisController(analysisProvider);
 
-	context.subscriptions.push(vscode.window.registerWebviewViewProvider('forwarder-view', provider));
-	context.subscriptions.push(vscode.commands.registerCommand('forwarder.getFunction', () => summaryController.handleGetFunctionCommand()));
-	context.subscriptions.push(vscode.commands.registerCommand('forwarder.analyzeActiveFile', () => analysisController.handleAnalyzeActiveFileCommand()));
+	context.subscriptions.push(vscode.window.registerWebviewViewProvider('forwarder-view', analysisProvider));
+	// context.subscriptions.push(vscode.commands.registerCommand('forwarder.getFunction', () => summaryController.handleGetFunctionCommand()));
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.analyze', () => analysisController.handleAnalyzeActiveFileCommand()));
 
 	// Debug commands
-	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.analyzeFile', () => DebugController.debugAnalyzeCurrentFile()));
-	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.showChannel', () => logger.show()));
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.analyze', () => DebugController.debugAnalyzeCurrentFile()));
 
-	// 在插件激活时自动运行一次分析（如果有活跃编辑器）
-	logger.info('[Extension] 在插件激活时自动运行分析...');
-	analysisController.analyzeActiveFile().catch(error => {
-		logger.warn(`[Extension] 自动分析失败: ${error}`);
-	});
 }
 
 export function deactivate() { }

@@ -1,13 +1,13 @@
 import * as vscode from 'vscode';
-import { ForwarderWebviewProvider } from '../providers/summaryview';
-import { LSPService, FunctionInfo } from '../services/LSPservices';
+import { SummaryViewProvider } from '../providers/SummaryView';
+import { LSPService, FunctionInfo } from '../services/LSPServices';
 import { logger } from '../utils/logger';
-import { LLMService } from '../services/LLMservices';
+import { LLMService } from '../services/LLMServices';
 
 export class SummaryController {
     private lastFuncInfo?: FunctionInfo; // 记录上次分析的函数信息
 
-    constructor(private readonly provider: ForwarderWebviewProvider) {
+    constructor(private readonly provider: SummaryViewProvider) {
         this.provider.setMessageHandler(this.handleWebviewMessage.bind(this));
     }
 
