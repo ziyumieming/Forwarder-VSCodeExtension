@@ -1,0 +1,133 @@
+:root {
+    --bg-0: #08131f;
+    --bg-1: #0f2437;
+    --nav-bg: rgba(10, 18, 29, 0.7);
+    --stroke: rgba(148, 183, 214, 0.28);
+    --text-main: #dce8f3;
+    --text-sub: #99b2c9;
+    --accent: #f3b23a;
+    --accent-hover: #ffc869;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    color: var(--text-main);
+    background: radial-gradient(circle at 20% 10%, #17304a 0%, var(--bg-0) 50%, #050a11 100%);
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.background-glow {
+    position: fixed;
+    inset: -20%;
+    pointer-events: none;
+    background:
+        radial-gradient(circle at 82% 14%, rgba(243, 178, 58, 0.14), transparent 40%),
+        radial-gradient(circle at 10% 86%, rgba(70, 156, 214, 0.18), transparent 42%);
+}
+
+.top-nav {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    height: 52px;
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: 14px;
+    padding: 0 14px;
+    border: 1px solid var(--stroke);
+    border-radius: 12px;
+    background: var(--nav-bg);
+    backdrop-filter: blur(6px);
+    z-index: 10;
+}
+
+.left {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.brand {
+    font-size: 13px;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+}
+
+.brand-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px rgba(243, 178, 58, 0.2);
+}
+
+.controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.nav-btn {
+    border: 1px solid var(--stroke);
+    color: var(--text-main);
+    background: rgba(16, 33, 50, 0.72);
+    border-radius: 9px;
+    padding: 7px 11px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 120ms ease, transform 120ms ease, background-color 120ms ease;
+}
+
+.nav-btn:hover {
+    transform: translateY(-1px);
+    border-color: rgba(199, 222, 242, 0.6);
+    background: rgba(23, 44, 64, 0.9);
+}
+
+.nav-btn-primary {
+    color: #1d1403;
+    border-color: rgba(255, 211, 133, 0.8);
+    background: linear-gradient(160deg, var(--accent) 0%, #e89b1f 100%);
+    font-weight: 600;
+}
+
+.nav-btn-primary:hover {
+    background: linear-gradient(160deg, var(--accent-hover) 0%, #f3ac34 100%);
+}
+
+.canvas-wrap {
+    position: fixed;
+    inset: 0;
+}
+
+#cy {
+    width: 100%;
+    height: 100%;
+}
+
+@media (max-width: 720px) {
+    .top-nav {
+        top: 8px;
+        left: 8px;
+        right: 8px;
+        height: auto;
+        grid-template-columns: 1fr;
+        gap: 10px;
+        padding: 10px;
+    }
+
+    .controls {
+        flex-wrap: wrap;
+    }
+}

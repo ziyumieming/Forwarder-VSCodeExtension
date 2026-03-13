@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; img-src {{cspSource}} data:; style-src {{cspSource}}; script-src 'nonce-{{nonce}}';" />
+    <link rel="stylesheet" href="{{styleUri}}" />
+    <title>Forwarder Analysis</title>
+</head>
+
+<body>
+    <div class="background-glow" aria-hidden="true"></div>
+
+    <nav class="top-nav">
+        <div class="left">
+            <span class="brand-dot"></span>
+            <span class="brand">Forwarder Analysis</span>
+        </div>
+        <div class="center controls">
+            <button id="btn-fit" class="nav-btn">Fit</button>
+            <button id="btn-layout" class="nav-btn">Layout</button>
+            <button id="btn-reset" class="nav-btn">Reset Focus</button>
+        </div>
+        <div class="right controls">
+            <button id="btn-query" class="nav-btn nav-btn-primary">Query Backend</button>
+        </div>
+    </nav>
+
+    <main class="canvas-wrap">
+        <div id="cy" aria-label="Cytoscape Canvas"></div>
+    </main>
+
+    <script nonce="{{nonce}}" src="{{cytoscapeUri}}"></script>
+    <script nonce="{{nonce}}" src="{{styleScriptUri}}"></script>
+    <script nonce="{{nonce}}" src="{{eventScriptUri}}"></script>
+    <script nonce="{{nonce}}" src="{{uiScriptUri}}"></script>
+    <script nonce="{{nonce}}" src="{{mainScriptUri}}"></script>
+</body>
+
+</html>

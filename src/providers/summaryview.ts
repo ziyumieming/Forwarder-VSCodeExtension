@@ -39,7 +39,8 @@ export class SummaryViewProvider implements vscode.WebviewViewProvider {
         const htmlPath = vscode.Uri.joinPath(this._extensionUri, 'media', 'initial', 'view.html');
         const uiScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'initial', 'ui.js'));
         const mockScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'initial', 'mock.js'));
-        const markdownScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'initial', 'marked.min.js'));
+        const markdownScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'public', 'marked.min.js'));
+        const iconUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'public', 'icon.png'));
         // 读取 HTML 文件内容
         let html = fs.readFileSync(htmlPath.fsPath, 'utf8');
 
@@ -51,7 +52,8 @@ export class SummaryViewProvider implements vscode.WebviewViewProvider {
             .replace(/{{scriptUri}}/g, scriptUri.toString())
             .replace(/{{uiScriptUri}}/g, uiScriptUri.toString())
             .replace(/{{mockScriptUri}}/g, mockScriptUri.toString())
-            .replace(/{{markdownScriptUri}}/g, markdownScriptUri.toString());
+            .replace(/{{markdownScriptUri}}/g, markdownScriptUri.toString())
+            .replace(/{{iconUri}}/g, iconUri.toString());
 
         return html;
     }
