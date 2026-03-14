@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { SummaryViewProvider } from '../providers/SummaryView';
+import { SummaryViewProvider } from './SummaryView';
 import { LSPService, FunctionInfo } from '../services/LSPServices';
 import { logger } from '../utils/logger';
 import { LLMService } from '../services/LLMServices';

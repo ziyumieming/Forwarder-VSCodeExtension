@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
-import { SummaryViewProvider } from './providers/SummaryView';
+import { SummaryViewProvider } from './deprecated/SummaryView';
 import { AnalysisViewProvider } from './providers/AnalysisView';
-import { SummaryController } from './controllers/SummaryController';
+import { SummaryController } from './deprecated/SummaryController';
 import { AnalysisController } from './controllers/AnalysisController';
 import { DebugController } from './controllers/DebugController';
+import { AnalysisRuntime } from './services/AnalysisRuntime';
 import { logger } from './utils/logger';
 
 
@@ -11,13 +12,20 @@ export function activate(context: vscode.ExtensionContext) {
 
 	logger.info("I'm here testing the extension's availability.");
 
-	const summaryProvider = new SummaryViewProvider(context.extensionUri);
+	// 初始化顶层服务运行时单例
+	const runtime = AnalysisRuntime.getInstance();
+
+	// 设置持久化位置，并在此时启动异步增量扫描（非阻塞主体激活任务）
+	const storagePath = vscode.Uri.joinPath(context.globalStorageUri, 'graph_snapshot.json').fsPath;
+	runtime.initialize(storagePath);
+	runtime.runIncrementalSync().catch(err => {
+		logger.info(`后台增量同步启动失败：${err}`);
+	});
+
 	const analysisProvider = new AnalysisViewProvider(context.extensionUri);
-	const summaryController = new SummaryController(summaryProvider);//已废弃
-	const analysisController = new AnalysisController(analysisProvider);
+	const analysisController = new AnalysisController(analysisProvider, runtime);
 
 	context.subscriptions.push(vscode.window.registerWebviewViewProvider('forwarder-view', analysisProvider));
-	// context.subscriptions.push(vscode.commands.registerCommand('forwarder.getFunction', () => summaryController.handleGetFunctionCommand()));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.analyze', () => analysisController.handleAnalyzeActiveFileCommand()));
 
 	// Debug commands
