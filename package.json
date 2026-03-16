@@ -76,7 +76,22 @@
         "mac": "cmd+shift+f",
         "when": "focusContextKey"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Forwarder",
+      "properties": {
+        "forwarder.analysis.includePattern": {
+          "type": "string",
+          "default": "**/*.{ts,js,py,java,cpp,c,cs,go,rs,rb,php}",
+          "description": "需要进行结构扫描和图构建的文件类型模式 (Glob syntax)。"
+        },
+        "forwarder.analysis.excludePattern": {
+          "type": "string",
+          "default": "**/{node_modules,.git,.svn,out,dist,build,bin,obj,vendor,target,.vscode,.idea}/**",
+          "description": "进行结构扫描时需要排斥的文件夹和文件模式 (Glob syntax)。"
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "pnpm run package",

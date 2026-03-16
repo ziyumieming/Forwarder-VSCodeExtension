@@ -16,6 +16,67 @@ export class ProjectGraph {
     // 入边表: targetId -> (relation -> Set<sourceId>)
     public inEdges: AdjacencyMap = new Map();
 
+    // 文件到节点 ID 的映射: uri -> Set<nodeId>
+    public fileNodes: Map<string, Set<string>> = new Map();
+
+    /**
+     * 供持久化模块调用的接口：重命名工作区文件，更新相关的节点及其边
+     */
+    public renameFile(oldUri: string, newUri: string): void {
+        const nodeIds = this.fileNodes.get(oldUri);
+        if (!nodeIds) { return; }
+
+        const newNodesSet = new Set<string>();
+        this.fileNodes.set(newUri, newNodesSet);
+
+        const idMap = new Map<string, string>(); // oldId -> newId
+
+        for (const oldId of nodeIds) {
+            const node = this.nodes.get(oldId);
+            if (!node) { continue; }
+
+            const newId = oldId.replace(oldUri, newUri);
+            idMap.set(oldId, newId);
+
+            // 移除旧节点，添加新节点
+            this.nodes.delete(oldId);
+            node.id = newId;
+            node.location.uri = newUri;
+            this.nodes.set(newId, node);
+            newNodesSet.add(newId);
+        }
+
+        // 清理旧文件的映射
+        this.fileNodes.delete(oldUri);
+
+        // 修复出入边
+        const reconstructEdges = (edgesMap: AdjacencyMap) => {
+            const tempMap = new Map(edgesMap);
+            edgesMap.clear();
+
+            for (const [key, relations] of tempMap.entries()) {
+                const newKey = idMap.get(key) || key;
+                const newRelationsMap = new Map<EdgeRelation, Set<string>>();
+
+                for (const [relation, valueSet] of relations.entries()) {
+                    const newValueSet = new Set<string>();
+                    for (const peerId of valueSet) {
+                        const newPeerId = idMap.get(peerId) || peerId;
+                        newValueSet.add(newPeerId);
+                    }
+                    if (newValueSet.size > 0) {
+                        newRelationsMap.set(relation, newValueSet);
+                    }
+                }
+
+                edgesMap.set(newKey, newRelationsMap);
+            }
+        };
+
+        reconstructEdges(this.outEdges);
+        reconstructEdges(this.inEdges);
+    }
+
     /**
      * 供数据适配层调用的接口：处理单文件的节点和关系更新指令
      * @param payload 包含文件URI及其内部结构解析结果（节点与边）
@@ -112,6 +173,12 @@ export class ProjectGraph {
             }
         }
         this.nodes.set(node.id, node);
+
+        // 更新文件-节点映射
+        if (!this.fileNodes.has(node.location.uri)) {
+            this.fileNodes.set(node.location.uri, new Set());
+        }
+        this.fileNodes.get(node.location.uri)!.add(node.id);
     }
 
     /**

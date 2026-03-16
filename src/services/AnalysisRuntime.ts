@@ -14,6 +14,9 @@ export class AnalysisRuntime {
 
     // 增加数据同步持久化服务
     private syncService?: SynchronizationService;
+    // 监听器注册销毁句柄
+    private configChangeListener?: vscode.Disposable;
+    private renameListener?: vscode.Disposable;
 
     private constructor() {
         this.projectGraph = new ProjectGraph();
@@ -31,6 +34,38 @@ export class AnalysisRuntime {
      */
     public initialize(storagePath: string) {
         this.syncService = new SynchronizationService(storagePath);
+
+        // 注册设置修改监听器
+        if (this.configChangeListener) {
+            this.configChangeListener.dispose();
+        }
+        this.configChangeListener = vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('forwarder.analysis.includePattern') ||
+                e.affectsConfiguration('forwarder.analysis.excludePattern')) {
+                logger.info('[AnalysisRuntime] 检测到扫描过滤规则修改，正在重置索引并重新发起全量扫描...');
+                this.syncService?.clearIndex();
+                this.runIncrementalSync().catch(err => {
+                    logger.info(`[AnalysisRuntime] 重新扫描失败: ${err}`);
+                });
+            }
+        });
+
+        // 注册重命名事件监听器
+        if (this.renameListener) {
+            this.renameListener.dispose();
+        }
+        this.renameListener = vscode.workspace.onDidRenameFiles(async e => {
+            for (const file of e.files) {
+                logger.info(`[AnalysisRuntime] 检测到文件重命名: ${file.oldUri.fsPath} -> ${file.newUri.fsPath}`);
+                this.projectGraph.renameFile(file.oldUri.toString(), file.newUri.toString());
+                if (this.syncService) {
+                    this.syncService.removeFileFromIndex(file.oldUri);
+                    // 重新解析被重命名的文件，更新索引及节点信息
+                    await this.analyzeFile(file.newUri);
+                    this.syncService.saveSnapshot(this.projectGraph);
+                }
+            }
+        });
     }
 
     /**
@@ -48,7 +83,15 @@ export class AnalysisRuntime {
 
         // 2. 将快照中的索引与当前工作区真实文件对比
         const changes = await this.syncService.scanWorkspaceChanges();
-        logger.info(`[AnalysisRuntime] 扫描完毕。发现需分析文件: ${changes.addedOrModified.length}个, 被删除文件: ${changes.deleted.length}个.`);
+        logger.info(`[AnalysisRuntime] 扫描完毕。发现重命名文件: ${changes.renamed?.length || 0}个, 需分析文件: ${changes.addedOrModified.length}个, 被删除文件: ${changes.deleted.length}个.`);
+
+        if (changes.renamed && changes.renamed.length > 0) {
+            for (const rename of changes.renamed) {
+                logger.info(`[AnalysisRuntime] 处理文件重命名 (增量同步): ${rename.oldUri.fsPath} -> ${rename.newUri.fsPath}`);
+                this.projectGraph.renameFile(rename.oldUri.toString(), rename.newUri.toString());
+                this.syncService.removeFileFromIndex(rename.oldUri);
+            }
+        }
 
         // 3. 处理新增或被修改的文件
         for (const uri of changes.addedOrModified) {
@@ -60,7 +103,8 @@ export class AnalysisRuntime {
             }
         }
 
-        // 4. 处理被删除的文件 (TODO: 目前暂不从图中清理对应节点)
+        // 4. 处理被删除的文件 
+        // TODO: 目前暂不从图中清理对应节点
         for (const uri of changes.deleted) {
             logger.info(`[AnalysisRuntime] 文件已删除 (图中历史边与节点保留待后续功能清理): ${uri.fsPath}`);
             this.syncService.removeFileFromIndex(uri);
@@ -105,5 +149,17 @@ export class AnalysisRuntime {
     // 编排调用: 查询节点依赖
     public queryNodeDependencies(nodeId: string, allowedRelations?: EdgeRelation[]): GraphViewData {
         return ViewQueryService.queryNodeDependencies(this.projectGraph, nodeId, allowedRelations);
+    }
+
+    /**
+     * 释放运行时注册的资源（如事件监听器）
+     */
+    public dispose(): void {
+        if (this.configChangeListener) {
+            this.configChangeListener.dispose();
+        }
+        if (this.renameListener) {
+            this.renameListener.dispose();
+        }
     }
 }

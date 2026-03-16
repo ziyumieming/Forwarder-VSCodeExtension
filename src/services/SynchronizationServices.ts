@@ -1,17 +1,22 @@
 ﻿import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { ProjectGraph } from '../models/GraphManager';
 import { logger } from '../utils/logger';
 import { EdgeRelation, IRNode } from '../models/GraphDefinition';
 
 export interface FileIndexSnapshot {
-    [uriString: string]: number; // mtimeMs
+    [uriString: string]: {
+        mtimeMs: number;
+        hash: string;
+    };
 }
 
 export interface WorkspaceChanges {
     addedOrModified: vscode.Uri[];
     deleted: vscode.Uri[];
+    renamed: { oldUri: vscode.Uri; newUri: vscode.Uri }[];
 }
 
 export class SynchronizationService {
@@ -117,12 +122,27 @@ export class SynchronizationService {
     }
 
     /**
+     * 计算文件的 SHA-256 哈希值
+     * TODO: 不必使用复杂的哈希算法，考虑改为CRC32或MumurHash
+     */
+    private async computeFileHash(fsPath: string): Promise<string> {
+        return new Promise((resolve, reject) => {
+            const hash = crypto.createHash('sha256');
+            const stream = fs.createReadStream(fsPath);
+            stream.on('error', err => reject(err));
+            stream.on('data', chunk => hash.update(chunk));
+            stream.on('end', () => resolve(hash.digest('hex')));
+        });
+    }
+
+    /**
      * 比较工作区当前文件修改时间和现有索引，计算出增量更新队列
      */
     public async scanWorkspaceChanges(): Promise<WorkspaceChanges> {
         const changes: WorkspaceChanges = {
             addedOrModified: [],
-            deleted: []
+            deleted: [],
+            renamed: []
         };
 
         const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -130,11 +150,13 @@ export class SynchronizationService {
             return changes;
         }
 
-        const currentFiles = new Set<string>();
+        const currentFiles = new Map<string, { uri: vscode.Uri, fsPath: string, hash: string, mtimeMs: number }>();
+        const potentialAdditions: { uri: vscode.Uri, fsPath: string, hash: string, mtimeMs: number }[] = [];
 
-        // 仅作为范例，扫描主流编程语言源码文件，排除第三方库和编译产物
-        const includePattern = '**/*.{ts,js,py,java,cpp,c,cs}';
-        const excludePattern = '**/{node_modules,.git,out,dist,build}/**';
+        // 从工作区设置中读取包含与排除模式，若无则使用默认的回退配置
+        const config = vscode.workspace.getConfiguration('forwarder.analysis');
+        const includePattern = config.get<string>('includePattern') || '**/*.{ts,js,py,java,cpp,c,cs,go,rs,rb,php}';
+        const excludePattern = config.get<string>('excludePattern') || '**/{node_modules,.git,.svn,out,dist,build,bin,obj,vendor,target,.vscode,.idea}/**';
 
         for (const folder of workspaceFolders) {
             const files = await vscode.workspace.findFiles(
@@ -145,32 +167,83 @@ export class SynchronizationService {
             for (const fileUri of files) {
                 const fsPath = fileUri.fsPath;
                 const uriString = fileUri.toString();
-                currentFiles.add(uriString);
 
                 try {
                     const stat = await fs.promises.stat(fsPath);
                     const mtimeMs = stat.mtimeMs;
 
-                    if (!this.fileIndex[uriString] || this.fileIndex[uriString] < mtimeMs) {
-                        changes.addedOrModified.push(fileUri);
-                        // 更新索引状态
-                        this.fileIndex[uriString] = mtimeMs;
+                    const indexEntry = this.fileIndex[uriString];
+                    if (!indexEntry || indexEntry.mtimeMs < mtimeMs) {
+                        // 文件是新增的或者已经被修改
+                        const fileHash = await this.computeFileHash(fsPath);
+                        potentialAdditions.push({ uri: fileUri, fsPath, hash: fileHash, mtimeMs });
+                    } else {
+                        // 未被修改
+                        currentFiles.set(uriString, { uri: fileUri, fsPath, hash: indexEntry.hash, mtimeMs });
                     }
                 } catch (err: any) {
-                    // 若文件权限等问题导致 stat 失败则忽略
                     logger.info(`[SyncService] 无法读取文件状态: ${err.message}`);
                 }
             }
         }
 
-        // 推断出已删除文件（存在于原快照中但已被移除的工作区文件）
+        // 推断出已删除文件（存在于原快照中但已被移除的工作区文件）的 URI 列表
+        const potentialDeletions: { uri: vscode.Uri, uriString: string, hash: string }[] = [];
         for (const uriString in this.fileIndex) {
-            if (!currentFiles.has(uriString)) {
-                changes.deleted.push(vscode.Uri.parse(uriString));
+            if (!currentFiles.has(uriString) && !potentialAdditions.find(p => p.uri.toString() === uriString)) {
+                potentialDeletions.push({
+                    uri: vscode.Uri.parse(uriString),
+                    uriString,
+                    hash: this.fileIndex[uriString].hash
+                });
+            }
+        }
+
+        // 检测重命名
+        // 如果有一个被标记为"新增"的文件和一个被标记为"删除"的文件哈希值相同，视为重命名
+        const additionMatched = new Set<string>();
+        const deletionMatched = new Set<string>();
+
+        for (const addition of potentialAdditions) {
+            // 在被删除文件中寻找 hash 相同的
+            const matchedDeletion = potentialDeletions.find(
+                d => d.hash === addition.hash && !deletionMatched.has(d.uriString)
+            );
+
+            if (matchedDeletion) {
+                // 是重命名
+                changes.renamed.push({ oldUri: matchedDeletion.uri, newUri: addition.uri });
+                additionMatched.add(addition.uri.toString());
+                deletionMatched.add(matchedDeletion.uriString);
+
+                // 更新索引
+                this.fileIndex[addition.uri.toString()] = { mtimeMs: addition.mtimeMs, hash: addition.hash };
+            }
+        }
+
+        // 剩余的是确定的新增或修改
+        for (const addition of potentialAdditions) {
+            if (!additionMatched.has(addition.uri.toString())) {
+                changes.addedOrModified.push(addition.uri);
+                this.fileIndex[addition.uri.toString()] = { mtimeMs: addition.mtimeMs, hash: addition.hash };
+            }
+        }
+
+        // 剩余的是确定的删除
+        for (const deletion of potentialDeletions) {
+            if (!deletionMatched.has(deletion.uriString)) {
+                changes.deleted.push(deletion.uri);
             }
         }
 
         return changes;
+    }
+
+    /**
+     * 重置缓存以强制下一次实行全量重新扫描
+     */
+    public clearIndex(): void {
+        this.fileIndex = {};
     }
 
     /**
