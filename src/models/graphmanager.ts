@@ -80,18 +80,100 @@ export class ProjectGraph {
     /**
      * 供数据适配层调用的接口：处理单文件的节点和关系更新指令
      * @param payload 包含文件URI及其内部结构解析结果（节点与边）
+     * @returns 返回受此文件变动影响需要重新解析的其他文件 URI 列表
      */
-    public updateFileSymbols(payload: FileSymbolsPayload): void {
-        // TODO: 当前侧重于新增逻辑，未来为了支持“更新”，可以在此处先根据 payload.uri 查出并清理旧节点和边
+    public updateFileSymbols(payload: FileSymbolsPayload): string[] {
+        const affectedReferencerUris = new Set<string>();
+        const oldNodeIdsList = Array.from(this.fileNodes.get(payload.uri) || []);
 
-        // 1. 添加/更新节点
+        const newNodeIds = new Set(payload.nodes.map(n => n.id));
+
+        // 1. 寻找受影响的引用者 (被删除的节点或新建节点的旧占位符)
+        for (const oldId of oldNodeIdsList) {
+            if (!newNodeIds.has(oldId)) {
+                this._collectReferencerUris(oldId, affectedReferencerUris);
+            }
+        }
+        for (const node of payload.nodes) {
+            if (!oldNodeIdsList.includes(node.id)) {
+                const existing = this.nodes.get(node.id);
+                if (existing && existing.placeHolder) {
+                    this._collectReferencerUris(node.id, affectedReferencerUris);
+                }
+            }
+        }
+
+        // 2. 清理当前文件的旧出边，连带清理目标节点对此源的入边表记录
+        this._removeNodesAndEdges(oldNodeIdsList, newNodeIds);
+
+        // 3. 重置并重新填充节点与边
+        this.fileNodes.set(payload.uri, new Set());
+
         for (const node of payload.nodes) {
             this._addNode(node);
         }
 
-        // 2. 添加关系边
         for (const edge of payload.edges) {
             this._addEdge(edge.sourceId, edge.targetId, edge.relation);
+        }
+
+        // 从受影响的列表中剔除自己
+        affectedReferencerUris.delete(payload.uri);
+        return Array.from(affectedReferencerUris);
+    }
+
+    /**
+     * @returns 返回受此文件删除变动影响需要重新解析的关联文件 URI 列表
+     */
+    public deleteFileSymbols(uri: string): string[] {
+        const affectedReferencerUris = new Set<string>();
+        const oldNodeIdsList = Array.from(this.fileNodes.get(uri) || []);
+
+        for (const oldId of oldNodeIdsList) {
+            this._collectReferencerUris(oldId, affectedReferencerUris);
+        }
+
+        this._removeNodesAndEdges(oldNodeIdsList);
+        this.fileNodes.delete(uri);
+        affectedReferencerUris.delete(uri);
+
+        return Array.from(affectedReferencerUris);
+    }
+
+    private _removeNodesAndEdges(nodeIdsToRemove: string[], retainedNodeIds?: Set<string>): void {
+        for (const oldId of nodeIdsToRemove) {
+            const outRels = this.outEdges.get(oldId);
+            if (outRels) {
+                for (const [rel, targets] of outRels.entries()) {
+                    for (const targetId of targets) {
+                        const targetInRels = this.inEdges.get(targetId);
+                        if (targetInRels && targetInRels.has(rel)) {
+                            targetInRels.get(rel)!.delete(oldId);
+                        }
+                    }
+                }
+                this.outEdges.delete(oldId);
+            }
+
+            // 清理不再需要保留的旧节点
+            if (!retainedNodeIds || !retainedNodeIds.has(oldId)) {
+                this.nodes.delete(oldId);
+            }
+        }
+    }
+
+    /**收集引用了指定节点的所有来源URI*/
+    private _collectReferencerUris(nodeId: string, outSet: Set<string>): void {
+        const inRels = this.inEdges.get(nodeId);
+        if (inRels) {
+            for (const [rel, sources] of inRels.entries()) {
+                for (const sourceId of sources) {
+                    const sourceNode = this.nodes.get(sourceId);
+                    if (sourceNode && sourceNode.location && sourceNode.location.uri) {
+                        outSet.add(sourceNode.location.uri);
+                    }
+                }
+            }
         }
     }
 
