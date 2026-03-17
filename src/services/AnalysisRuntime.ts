@@ -97,7 +97,8 @@ export class AnalysisRuntime {
         }
         this.saveListener = vscode.workspace.onDidSaveTextDocument(doc => {
             if (doc.uri.scheme === 'file') {
-                this.enqueueTask(doc.uri, '文件主动保存触发图结构更新', true);
+                logger.info(`[AnalysisRuntime] 文件保存触发重扫: ${doc.uri.fsPath}`);
+                this.enqueueTask(doc.uri, '文件保存后触发重新同步解析', true);
             }
         });
     }
@@ -141,8 +142,19 @@ export class AnalysisRuntime {
         // 如果当前队列是空的(不需要查其他人)，也顺手存个快照。是偶发的删除事件触发，仅在编辑器内删除时触发
         //TODO:这里是同步的，是否会出问题？
         if (this.taskQueue.length === 0 && this.syncService) {
-            this.syncService.saveSnapshot(this.projectGraph);
+            this.syncService.saveSnapshot(this.projectGraph, this.getSerializableTasks());
         }
+    }
+
+    /**
+     * 获取支持JSON序列化的任务队列结构
+     */
+    private getSerializableTasks(): { uri: string, reason: string, cascade: boolean }[] {
+        return this.taskQueue.map(t => ({
+            uri: t.uri.toString(),
+            reason: t.reason,
+            cascade: t.cascade
+        }));
     }
 
     /**
@@ -155,8 +167,8 @@ export class AnalysisRuntime {
 
         logger.info('[AnalysisRuntime] 开始启动增量同步...');
 
-        // 1. 加载本地持久化快照
-        await this.syncService.loadSnapshot(this.projectGraph);
+        // 1. 加载本地持久化快照与积压队列
+        const savedQueue = await this.syncService.loadSnapshot(this.projectGraph);
 
         // 2. 将快照中的索引与当前工作区真实文件对比
         const changes = await this.syncService.scanWorkspaceChanges();
@@ -207,9 +219,25 @@ export class AnalysisRuntime {
             this.executeDeletion(uri);
         }
 
+        // 5. 恢复由于关机等原因中断的任务队列 (必须在执行完增减判定后恢复，以防试图恢复已删除的文件)
+        const deletedUriStrs = new Set(changes.deleted.map(u => u.toString()));
+        for (const task of savedQueue) {
+            // 确保任务对应的文件既没有在此次离线期间被删除，并且也能被 VS Code 文件系统读取到
+            if (!deletedUriStrs.has(task.uri)) {
+                try {
+                    const targetUri = vscode.Uri.parse(task.uri);
+                    await vscode.workspace.fs.stat(targetUri);
+                    this.enqueueTask(targetUri, task.reason + ' (从上一次历史会话恢复)', task.cascade);
+                } catch (err) {
+                    logger.info(`[AnalysisRuntime] 无法恢复任务对应的文件 ${task.uri}，可能已被删除或无法访问，已跳过恢复。`);
+                    //TODO：是否有必要处理该异常？
+                }
+            }
+        }
+
         // 若队列中没有任务，直接保存快照；否则通过队列后续保存
         if (this.taskQueue.length === 0) {
-            await this.syncService.saveSnapshot(this.projectGraph);
+            await this.syncService.saveSnapshot(this.projectGraph, this.getSerializableTasks());
             logger.info('[AnalysisRuntime] 增量同步完成！无新增更新项。');
         }
     }
