@@ -4,6 +4,8 @@ export interface FileSymbolsPayload {
     uri: string;
     nodes: IRNode[];
     edges: EdgeData[];
+    unchanged?: boolean;
+    fingerprint?: string;
 }
 
 export class ProjectGraph {
@@ -19,6 +21,9 @@ export class ProjectGraph {
     // 文件到节点 ID 的映射: uri -> Set<nodeId>
     public fileNodes: Map<string, Set<string>> = new Map();
 
+    // 文件结构特征指纹缓存: uri -> fingerprint
+    public fileFingerprints: Map<string, string> = new Map();
+
     /**
      * 供持久化模块调用的接口：重命名工作区文件，更新相关的节点及其边
      */
@@ -28,6 +33,13 @@ export class ProjectGraph {
 
         const newNodesSet = new Set<string>();
         this.fileNodes.set(newUri, newNodesSet);
+
+        // 迁移指纹
+        const fp = this.fileFingerprints.get(oldUri);
+        if (fp) {
+            this.fileFingerprints.set(newUri, fp);
+            this.fileFingerprints.delete(oldUri);
+        }
 
         const idMap = new Map<string, string>(); // oldId -> newId
 
@@ -78,48 +90,119 @@ export class ProjectGraph {
     }
 
     /**
-     * 供数据适配层调用的接口：处理单文件的节点和关系更新指令
+     * 供数据适配层调用的接口：处理单文件的节点和关系更新指令 (支持 Delta Diff 与 Fingerprint)
      * @param payload 包含文件URI及其内部结构解析结果（节点与边）
      * @returns 返回受此文件变动影响需要重新解析的其他文件 URI 列表
      */
     public updateFileSymbols(payload: FileSymbolsPayload): string[] {
+        if (payload.unchanged && payload.fingerprint) {
+            // 指纹未变，说明结构语义未变，只需要偷偷更新已有节点的物理位置 (location) 即可
+            for (const n of payload.nodes) {
+                const existing = this.nodes.get(n.id);
+                // 仅更新属于本文件且非占位符的真实节点
+                if (existing && !existing.placeHolder) {
+                    existing.location = n.location;
+                }
+            }
+            this.fileFingerprints.set(payload.uri, payload.fingerprint);
+            return []; // 无任何边结构影响，返回空级联
+        }
+
         const affectedReferencerUris = new Set<string>();
         const oldNodeIdsList = Array.from(this.fileNodes.get(payload.uri) || []);
+        const newNodeIdsList = payload.nodes.map(n => n.id);
+        const newNodeIdsSet = new Set(newNodeIdsList);
 
-        const newNodeIds = new Set(payload.nodes.map(n => n.id));
-
-        // 1. 寻找受影响的引用者 (被删除的节点或新建节点的旧占位符)
-        for (const oldId of oldNodeIdsList) {
-            if (!newNodeIds.has(oldId)) {
-                this._collectReferencerUris(oldId, affectedReferencerUris);
+        // 1. 寻找被移除节点的影响引用者，并清理它们
+        const removedNodeIds = oldNodeIdsList.filter(id => !newNodeIdsSet.has(id));
+        for (const oldId of removedNodeIds) {
+            this._collectReferencerUris(oldId, affectedReferencerUris);
+        }
+        if (removedNodeIds.length > 0) {
+            this._removeNodesAndEdges(removedNodeIds);
+            for (const id of removedNodeIds) {
+                this.fileNodes.get(payload.uri)!.delete(id);
             }
         }
+
+        // 2. 探查新建节点是否覆盖了旧的处于"占位符"状态的节点
+        // 并添加/更新所有传入的新节点
+        if (!this.fileNodes.has(payload.uri)) {
+            this.fileNodes.set(payload.uri, new Set());
+        }
         for (const node of payload.nodes) {
-            if (!oldNodeIdsList.includes(node.id)) {
+            const isNew = !oldNodeIdsList.includes(node.id);
+            if (isNew) {
                 const existing = this.nodes.get(node.id);
                 if (existing && existing.placeHolder) {
                     this._collectReferencerUris(node.id, affectedReferencerUris);
                 }
+                this._addNode(node);
+            } else {
+                // 已经存在的节点，更新其普通属性如 location，name
+                const existing = this.nodes.get(node.id);
+                if (existing) {
+                    existing.location = node.location;
+                    existing.name = node.name;
+                    // ... type 和 namespace 原则上 id 包含，不易变
+                }
             }
         }
 
-        // 2. 清理当前文件的旧出边，连带清理目标节点对此源的入边表记录
-        this._removeNodesAndEdges(oldNodeIdsList, newNodeIds);
+        // 3. Diff 同步此文件控制的出边关系 (仅比较包含的或者从此文件内节点发出的关系)
+        this._syncFileOutEdges(newNodeIdsList, payload.edges);
 
-        // 3. 重置并重新填充节点与边
-        this.fileNodes.set(payload.uri, new Set());
-
-        for (const node of payload.nodes) {
-            this._addNode(node);
-        }
-
-        for (const edge of payload.edges) {
-            this._addEdge(edge.sourceId, edge.targetId, edge.relation);
+        // 更新保存最新的文件指纹
+        if (payload.fingerprint) {
+            this.fileFingerprints.set(payload.uri, payload.fingerprint);
         }
 
         // 从受影响的列表中剔除自己
         affectedReferencerUris.delete(payload.uri);
         return Array.from(affectedReferencerUris);
+    }
+
+    /**
+     * 将某个文件应该发出的最新边列表与当前图内旧边作 Diff，只增删有差异的部分
+     */
+    private _syncFileOutEdges(nodeIds: string[], expectedEdges: EdgeData[]): void {
+        const expectedMap = new Map<string, Map<EdgeRelation, Set<string>>>();
+        for (const edge of expectedEdges) {
+            if (!expectedMap.has(edge.sourceId)) expectedMap.set(edge.sourceId, new Map());
+            const relMap = expectedMap.get(edge.sourceId)!;
+            if (!relMap.has(edge.relation)) relMap.set(edge.relation, new Set());
+            relMap.get(edge.relation)!.add(edge.targetId);
+        }
+
+        for (const sourceId of nodeIds) {
+            const expectedRels = expectedMap.get(sourceId);
+            const currentRels = this.outEdges.get(sourceId);
+
+            if (!expectedRels && !currentRels) continue;
+
+            // Compute edges to remove
+            if (currentRels) {
+                for (const [rel, targets] of Array.from(currentRels.entries())) {
+                    for (const targetId of Array.from(targets)) {
+                        if (!expectedRels?.get(rel)?.has(targetId)) {
+                            currentRels.get(rel)!.delete(targetId);
+                            this.inEdges.get(targetId)?.get(rel)?.delete(sourceId);
+                        }
+                    }
+                }
+            }
+
+            // Compute edges to add
+            if (expectedRels) {
+                for (const [rel, targets] of expectedRels.entries()) {
+                    for (const targetId of targets) {
+                        if (!currentRels?.get(rel)?.has(targetId)) {
+                            this._addEdge(sourceId, targetId, rel);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -135,6 +218,7 @@ export class ProjectGraph {
 
         this._removeNodesAndEdges(oldNodeIdsList);
         this.fileNodes.delete(uri);
+        this.fileFingerprints.delete(uri);
         affectedReferencerUris.delete(uri);
 
         return Array.from(affectedReferencerUris);

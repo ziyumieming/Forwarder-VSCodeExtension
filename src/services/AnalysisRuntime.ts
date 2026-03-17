@@ -96,12 +96,12 @@ export class AnalysisRuntime {
             clearTimeout(this.pendingDeletions.get(uriStr));
         }
 
-        logger.info(`[AnalysisRuntime] 调度文件删除防抖延迟 (3秒): ${uri.fsPath}`);
-        // 3秒防抖延迟
+        logger.info(`[AnalysisRuntime] 调度文件删除防抖延迟 (5秒): ${uri.fsPath}`);
+        // 5秒防抖延迟
         const timer = setTimeout(() => {
             this.pendingDeletions.delete(uriStr);
             this.executeDeletion(uri);
-        }, 3000);
+        }, 5000);
 
         this.pendingDeletions.set(uriStr, timer);
     }
@@ -191,7 +191,7 @@ export class AnalysisRuntime {
         const existingIndex = this.taskQueue.findIndex(t => t.uri.toString() === uriStr);
 
         if (existingIndex >= 0) {
-            // 如果已在队列中，提权其级联属性
+            // 如果已在队列中，提权其级联属性。发生于波及文件被修改时
             if (cascade && !this.taskQueue[existingIndex].cascade) {
                 this.taskQueue[existingIndex].cascade = true;
                 this.taskQueue[existingIndex].reason = reason;
@@ -259,11 +259,21 @@ export class AnalysisRuntime {
     private async doAnalyzeFile(uri: vscode.Uri): Promise<string[]> {
         logger.info(`[AnalysisRuntime] 正在进行文件实质性解析: ${uri.fsPath}`);
 
+        // 从缓存中获取之前的结构指纹
+        const oldFingerprint = this.projectGraph.fileFingerprints.get(uri.toString());
+
         // 1. 调用适配器服务，从LSP提取并组装指定文件的 IRNode 与内部关系边界
-        const payload = await AdapterService.extractFileSymbols(uri);
+        const payload = await AdapterService.extractFileSymbols(uri, oldFingerprint);
 
         if (!payload || payload.nodes.length === 0) {
             logger.info(`[AnalysisRuntime] 未能从 ${uri.fsPath} 提取到结构信息或文件为空。`);
+            return [];
+        }
+
+        // 提前阻断: 结构语义未发生本质改变
+        if (payload.unchanged) {
+            logger.info(`[AnalysisRuntime] 文件结构指纹未变，已跳过关系重计算并通过增量 Diff 刷新物理游标: ${uri.fsPath}`);
+            this.projectGraph.updateFileSymbols(payload);
             return [];
         }
 

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import { IRNode, NodeType, EdgeRelation, EdgeData } from '../models/GraphDefinition';
 import { FileSymbolsPayload } from '../models/GraphManager';
 import { LSPService } from './LSPServices';
@@ -7,16 +8,33 @@ export class AdapterService {
     /**
      * 提取和转换指定文件的结构数据，生成给统一图数据结构的IR及其包含关系边
      */
-    public static async extractFileSymbols(uri: vscode.Uri): Promise<FileSymbolsPayload | undefined> {
+    public static async extractFileSymbols(uri: vscode.Uri, oldFingerprint?: string): Promise<FileSymbolsPayload | undefined> {
         const document = await vscode.workspace.openTextDocument(uri);
         const symbols = await LSPService.getDocumentSymbols(uri);
         if (!symbols) {
             return undefined;
         }
 
+        const uriString = uri.toString();
+        const fingerprint = this._computeFingerprint(document, symbols);
+
+        if (fingerprint === oldFingerprint) {
+            // 结构指纹未变，无需进行高昂成本的定义跳转和关系重建
+            const nodes: IRNode[] = [];
+            this._extractBasicNodes(document, symbols, uriString, '', nodes);
+            return {
+                uri: uriString,
+                nodes,
+                edges: [],
+                unchanged: true,
+                fingerprint
+            };
+        }
+
+        // --- 以下为全量解析逻辑 ---
         const nodes: IRNode[] = [];
         const edges: EdgeData[] = [];
-        const uriString = uri.toString();
+
 
         // 用于缓存外部文件的符号树，避免重复请求 LSP
         const symbolCache: Map<string, vscode.DocumentSymbol[]> = new Map();
@@ -27,8 +45,81 @@ export class AdapterService {
         return {
             uri: uriString,
             nodes,
-            edges
+            edges,
+            unchanged: false,
+            fingerprint
         };
+    }
+
+    /**
+     * 计算文档语义结构指纹
+     * 提取影响图拓扑的关键特征：符号类型、名称、内部层级以及类/接口的声明头（包含 extends/implements 语句）
+     */
+    private static _computeFingerprint(document: vscode.TextDocument, symbols: vscode.DocumentSymbol[]): string {
+        const hashStr = this._hashSymbols(document, symbols);
+        return crypto.createHash('md5').update(hashStr).digest('hex');
+    }
+
+    private static _hashSymbols(document: vscode.TextDocument, symbols: vscode.DocumentSymbol[]): string {
+        let str = '';
+        for (const sym of symbols) {
+            const type = this._mapSymbolKindToNodeType(sym.kind);
+            if (type) {
+                str += `${type}:${sym.name}:`;
+                if (type === 'class' || type === 'interface') {
+                    const sigRange = new vscode.Range(sym.selectionRange.end, sym.range.end);
+                    let sigText = document.getText(sigRange);
+                    const braceIndex = sigText.indexOf('{');
+                    if (braceIndex !== -1) {
+                        sigText = sigText.substring(0, braceIndex);
+                    }
+                    // 收录声明头，因为里面包含改变被扫描对象之间横向关系的extends/implements短语
+                    str += `${sigText};`;
+                }
+            }
+            if (sym.children && sym.children.length > 0) {
+                str += '[' + this._hashSymbols(document, sym.children) + ']';
+            }
+        }
+        return str;
+    }
+
+    /**
+     * 仅快速提取单文档本地域节点基本信息，不发起外部跳转，用于局部物理信息覆盖
+     */
+    private static _extractBasicNodes(
+        document: vscode.TextDocument,
+        symbols: vscode.DocumentSymbol[],
+        uriString: string,
+        namespace: string,
+        nodes: IRNode[]
+    ): void {
+        for (const sym of symbols) {
+            const nodeType = this._mapSymbolKindToNodeType(sym.kind);
+            if (!nodeType) {
+                if (sym.children) this._extractBasicNodes(document, sym.children, uriString, namespace, nodes);
+                continue;
+            }
+            const id = `${uriString}#${nodeType}#${namespace}#${sym.name}`;
+            nodes.push({
+                id,
+                name: sym.name,
+                type: nodeType,
+                namespace: namespace || undefined,
+                location: {
+                    uri: uriString,
+                    range: {
+                        start: { line: sym.range.start.line, character: sym.range.start.character },
+                        end: { line: sym.range.end.line, character: sym.range.end.character }
+                    }
+                },
+                placeHolder: false
+            });
+            if (sym.children) {
+                const childNamespace = namespace ? `${namespace}.${sym.name}` : sym.name;
+                this._extractBasicNodes(document, sym.children, uriString, childNamespace, nodes);
+            }
+        }
     }
 
     private static async _processSymbols(

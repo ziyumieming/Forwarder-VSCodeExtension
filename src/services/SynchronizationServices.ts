@@ -52,7 +52,8 @@ export class SynchronizationService {
                 graph: {
                     nodes: nodesArray,
                     outEdges: outEdgesArray,
-                    inEdges: inEdgesArray
+                    inEdges: inEdgesArray,
+                    fileFingerprints: Array.from(graph.fileFingerprints.entries())
                 },
                 index: this.fileIndex
             };
@@ -85,9 +86,24 @@ export class SynchronizationService {
             this.fileIndex = data.index || {};
 
             if (data.graph) {
-                // 还原 nodes
+                // 还原 nodes 及 fileNodes 关联索引
                 if (data.graph.nodes) {
                     graph.nodes = new Map<string, IRNode>(data.graph.nodes);
+                    graph.fileNodes = new Map();
+                    for (const [id, node] of graph.nodes.entries()) {
+                        if (node.location && node.location.uri) {
+                            const uri = node.location.uri;
+                            if (!graph.fileNodes.has(uri)) {
+                                graph.fileNodes.set(uri, new Set());
+                            }
+                            graph.fileNodes.get(uri)!.add(id);
+                        }
+                    }
+                }
+
+                // 还原 fileFingerprints
+                if (data.graph.fileFingerprints) {
+                    graph.fileFingerprints = new Map(data.graph.fileFingerprints);
                 }
 
                 // 还原 outEdges
