@@ -6,6 +6,12 @@ import { ProjectGraph } from '../models/GraphManager';
 import { logger } from '../utils/logger';
 import { EdgeRelation, IRNode } from '../models/GraphDefinition';
 
+export interface PendingTaskData {
+    uriStr: string;
+    reason: string;
+    cascade: boolean;
+}
+
 export interface FileIndexSnapshot {
     [uriString: string]: {
         mtimeMs: number;
@@ -138,17 +144,46 @@ export class SynchronizationService {
     }
 
     /**
-     * 计算文件的 SHA-256 哈希值
-     * TODO: 不必使用复杂的哈希算法，考虑改为CRC32或MumurHash
+     * 计算文件的轻量摘要（由于此处只用于重命名文件对比，不涉及安全，使用md5足够快且能减少依赖开销）
      */
     private async computeFileHash(fsPath: string): Promise<string> {
         return new Promise((resolve, reject) => {
-            const hash = crypto.createHash('sha256');
+            const hash = crypto.createHash('md5');
             const stream = fs.createReadStream(fsPath);
             stream.on('error', err => reject(err));
             stream.on('data', chunk => hash.update(chunk));
             stream.on('end', () => resolve(hash.digest('hex')));
         });
+    }
+
+    /**
+     * 同步保存尚未处理完毕的队列内容
+     */
+    public savePendingTasksSync(tasks: PendingTaskData[]): void {
+        const pendingPath = this.storagePath.replace('graph_snapshot.json', 'pending_tasks.json');//保证相同文件夹
+        try {
+            fs.writeFileSync(pendingPath, JSON.stringify(tasks, null, 2), 'utf8');
+            logger.info(`[SyncService] 未完成队列表已同步保存至: ${pendingPath}`);
+        } catch (e: any) {
+            logger.info(`[SyncService] 保存未完成队列失败: ${e.message}`);
+        }
+    }
+
+    /**
+     * 同步加载上次关闭时未处理完毕的队列，读取后即刻将其删除
+     */
+    public loadPendingTasksSync(): PendingTaskData[] {
+        const pendingPath = this.storagePath.replace('graph_snapshot.json', 'pending_tasks.json');
+        if (fs.existsSync(pendingPath)) {
+            try {
+                const content = fs.readFileSync(pendingPath, 'utf8');
+                fs.unlinkSync(pendingPath); // 恢复即删除，防止后续重复读取污染
+                return JSON.parse(content) as PendingTaskData[];
+            } catch (e: any) {
+                logger.info(`[SyncService] 读取未完成队列失败: ${e.message}`);
+            }
+        }
+        return [];
     }
 
     /**
@@ -186,7 +221,7 @@ export class SynchronizationService {
 
                 try {
                     const stat = await fs.promises.stat(fsPath);
-                    const mtimeMs = stat.mtimeMs;
+                    const mtimeMs = stat.mtimeMs;//逐个扫描修改时间应该已经是最快的了
 
                     const indexEntry = this.fileIndex[uriString];
                     if (!indexEntry || indexEntry.mtimeMs < mtimeMs) {

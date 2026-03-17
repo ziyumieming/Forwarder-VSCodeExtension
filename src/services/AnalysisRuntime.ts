@@ -24,10 +24,13 @@ export class AnalysisRuntime {
     private configChangeListener?: vscode.Disposable;
     private renameListener?: vscode.Disposable;
     private deleteListener?: vscode.Disposable;
+    private saveListener?: vscode.Disposable;
 
     // 分析调度队列
     private taskQueue: AnalysisTask[] = [];
+    private uncommittedTasks: Map<string, AnalysisTask> = new Map();
     private isProcessing: boolean = false;
+    private activeTask?: AnalysisTask;
     private pendingDeletions: Map<string, NodeJS.Timeout> = new Map();
 
     private constructor() {
@@ -87,6 +90,16 @@ export class AnalysisRuntime {
                 this.scheduleDeletion(file);
             }
         });
+
+        // 注册保存事件监听器
+        if (this.saveListener) {
+            this.saveListener.dispose();
+        }
+        this.saveListener = vscode.workspace.onDidSaveTextDocument(doc => {
+            if (doc.uri.scheme === 'file') {
+                this.enqueueTask(doc.uri, '文件主动保存触发图结构更新', true);
+            }
+        });
     }
 
     private scheduleDeletion(uri: vscode.Uri): void {
@@ -125,7 +138,8 @@ export class AnalysisRuntime {
             }
         }
 
-        // 如果当前队列是空的(不需要查其他人)，也顺手存个快照
+        // 如果当前队列是空的(不需要查其他人)，也顺手存个快照。是偶发的删除事件触发，仅在编辑器内删除时触发
+        //TODO:这里是同步的，是否会出问题？
         if (this.taskQueue.length === 0 && this.syncService) {
             this.syncService.saveSnapshot(this.projectGraph);
         }
@@ -156,7 +170,33 @@ export class AnalysisRuntime {
             }
         }
 
-        // 3. 处理按需更新文件 (入队)
+        // 3. 加载历史遗留挂起任务与未固化任务
+        const pendingTasks = this.syncService.loadPendingTasksSync();
+        if (pendingTasks.length > 0) {
+            logger.info(`[AnalysisRuntime] 发现上次退出时未处理完及未固化的任务，共 ${pendingTasks.length} 个，正在恢复...`);
+            for (const pt of pendingTasks) {
+                let targetUriStr = pt.uriStr;
+                // 检查是否在离线期间被并且成功识别为了重命名
+                if (changes.renamed) {
+                    const renameRecord = changes.renamed.find(r => r.oldUri.toString() === pt.uriStr);
+                    if (renameRecord) {
+                        targetUriStr = renameRecord.newUri.toString();
+                        logger.info(`[AnalysisRuntime] 追回已重命名的挂起任务: ${pt.uriStr} -> ${targetUriStr}`);
+                    }
+                }
+
+                try {
+                    const uri = vscode.Uri.parse(targetUriStr);
+                    // 仅当文件存在于磁盘时，才进行重检查恢复
+                    await vscode.workspace.fs.stat(uri);
+                    this.enqueueTask(uri, `[自动恢复未固化任务] ${pt.reason}`, pt.cascade);
+                } catch (err: any) {
+                    logger.info(`[AnalysisRuntime] 挂起任务文件已丢失或不可读，跳过恢复: ${targetUriStr}`);
+                }
+            }
+        }
+
+        // 4. 处理按需更新文件 (入队)
         for (const uri of changes.addedOrModified) {
             this.enqueueTask(uri, '增量扫描发现文件修改/新增', true);
         }
@@ -217,7 +257,10 @@ export class AnalysisRuntime {
 
         try {
             while (this.taskQueue.length > 0) {
-                const task = this.taskQueue.shift()!;
+                this.activeTask = this.taskQueue.shift()!;
+                const task = this.activeTask;
+                // 记录到未提交集合，供突发退出时追回
+                this.uncommittedTasks.set(task.uri.toString(), task);
                 logger.info(`[AnalysisRuntime] 分析队列执行文件: ${task.uri.fsPath} (原因: ${task.reason})`);
 
                 try {
@@ -233,11 +276,14 @@ export class AnalysisRuntime {
                 } catch (err: any) {
                     logger.info(`[AnalysisRuntime] 忽略解析失败的文件 ${task.uri.fsPath}: ${err.message}`);
                 }
+
+                this.activeTask = undefined;
             }
 
             // 队列全部消费完毕后，固化保存最新的全图一次
             if (this.syncService) {
                 await this.syncService.saveSnapshot(this.projectGraph);
+                this.uncommittedTasks.clear(); // 保存成功后清空未提交记录
                 logger.info('[AnalysisRuntime] 调度队列全部处理完成，数据流更新并固化本地完毕！');
             }
         } finally {
@@ -298,6 +344,39 @@ export class AnalysisRuntime {
      * 释放运行时注册的资源（如事件监听器）
      */
     public dispose(): void {
+        // 插件退出前立刻同步保存未完成及未固化的任务
+        const leftoverTasksMap = new Map<string, AnalysisTask>();
+        // 1. 先载入所有已处理但未固化到快照的任务
+        for (const task of this.uncommittedTasks.values()) {
+            leftoverTasksMap.set(task.uri.toString(), task);
+        }
+        // 2. 叠加上尚未处理的队列任务，若同名且新任务级联级别更高则提权
+        for (const task of this.taskQueue) {
+            const existing = leftoverTasksMap.get(task.uri.toString());
+            if (existing && task.cascade) {
+                existing.cascade = true;
+            } else if (!existing) {
+                leftoverTasksMap.set(task.uri.toString(), task);
+            }
+        }
+        // 3. 加上当前刚好正在被执行的任务
+        if (this.activeTask) {
+            const key = this.activeTask.uri.toString();
+            if (!leftoverTasksMap.has(key)) {
+                leftoverTasksMap.set(key, this.activeTask);
+            }
+        }
+
+        const leftoverTasks = Array.from(leftoverTasksMap.values());
+        if (leftoverTasks.length > 0 && this.syncService) {
+            const pendingData = leftoverTasks.map(t => ({
+                uriStr: t.uri.toString(),
+                reason: t.reason,
+                cascade: t.cascade
+            }));
+            this.syncService.savePendingTasksSync(pendingData);
+        }
+
         if (this.configChangeListener) {
             this.configChangeListener.dispose();
         }
@@ -306,6 +385,9 @@ export class AnalysisRuntime {
         }
         if (this.deleteListener) {
             this.deleteListener.dispose();
+        }
+        if (this.saveListener) {
+            this.saveListener.dispose();
         }
         for (const timer of this.pendingDeletions.values()) {
             clearTimeout(timer);
