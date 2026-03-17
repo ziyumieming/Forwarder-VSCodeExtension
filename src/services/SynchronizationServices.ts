@@ -19,6 +19,12 @@ export interface WorkspaceChanges {
     renamed: { oldUri: vscode.Uri; newUri: vscode.Uri }[];
 }
 
+export interface SerializedTask {
+    uri: string;
+    reason: string;
+    cascade: boolean;
+}
+
 export class SynchronizationService {
     private storagePath: string;
     private fileIndex: FileIndexSnapshot = {};
@@ -30,7 +36,7 @@ export class SynchronizationService {
     /**
      * 将当前图数据结构和文件修改时间索引序列化到本地存储
      */
-    public async saveSnapshot(graph: ProjectGraph): Promise<void> {
+    public async saveSnapshot(graph: ProjectGraph, taskQueue: SerializedTask[] = []): Promise<void> {
         try {
             // 序列化 nodes (Map -> Array)
             const nodesArray = Array.from(graph.nodes.entries());
@@ -55,7 +61,8 @@ export class SynchronizationService {
                     inEdges: inEdgesArray,
                     fileFingerprints: Array.from(graph.fileFingerprints.entries())
                 },
-                index: this.fileIndex
+                index: this.fileIndex,
+                taskQueue
             };
 
             const dir = path.dirname(this.storagePath);
@@ -72,11 +79,12 @@ export class SynchronizationService {
 
     /**
      * 从本地存储反序列化并还原图数据结构和文件索引
+     * @returns 返回未完成的分析任务队列
      */
-    public async loadSnapshot(graph: ProjectGraph): Promise<void> {
+    public async loadSnapshot(graph: ProjectGraph): Promise<SerializedTask[]> {
         if (!fs.existsSync(this.storagePath)) {
             logger.info(`[SyncService] 未找到本地快照，将从零开始构建图数据。`);
-            return;
+            return [];
         }
 
         try {
@@ -131,19 +139,20 @@ export class SynchronizationService {
                 }
             }
             logger.info(`[SyncService] 本地快照加载成功。`);
+            return data.taskQueue || [];
         } catch (error: any) {
             logger.info(`[SyncService] 读取或解析快照出错: ${error.message}，将视为无缓存启动。`);
             this.fileIndex = {};
+            return [];
         }
     }
 
     /**
-     * 计算文件的 SHA-256 哈希值
-     * TODO: 不必使用复杂的哈希算法，考虑改为CRC32或MumurHash
+     * 计算文件的哈希值，现使用更为轻量且高效的 md5 算法
      */
     private async computeFileHash(fsPath: string): Promise<string> {
         return new Promise((resolve, reject) => {
-            const hash = crypto.createHash('sha256');
+            const hash = crypto.createHash('md5');
             const stream = fs.createReadStream(fsPath);
             stream.on('error', err => reject(err));
             stream.on('data', chunk => hash.update(chunk));
