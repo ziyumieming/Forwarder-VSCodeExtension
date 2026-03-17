@@ -1,9 +1,6 @@
 import * as vscode from 'vscode';
-import { SummaryViewProvider } from './deprecated/SummaryView';
 import { AnalysisViewProvider } from './providers/AnalysisView';
-import { SummaryController } from './deprecated/SummaryController';
 import { AnalysisController } from './controllers/AnalysisController';
-import { DebugController } from './controllers/DebugController';
 import { AnalysisRuntime } from './services/AnalysisRuntime';
 import { logger } from './utils/logger';
 
@@ -27,9 +24,6 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(vscode.window.registerWebviewViewProvider('forwarder-view', analysisProvider));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.analyze', () => analysisController.handleAnalyzeActiveFileCommand()));
-
-	// Debug commands
-	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.analyze', () => DebugController.debugAnalyzeCurrentFile()));
 
 	// 将 runtime 也加入销毁队列，保证退出时解除设置监听
 	context.subscriptions.push({ dispose: () => runtime.dispose() });
