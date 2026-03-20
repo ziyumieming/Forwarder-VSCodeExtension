@@ -146,7 +146,7 @@ export class DebugController {
 
         nodes.forEach(node => {
             typeCount.set(node.type, (typeCount.get(node.type) || 0) + 1);
-            if (node.placeHolder) placeholderCount++;
+            if (node.placeHolder) { placeholderCount++; }
             uriSet.add(node.location.uri);
         });
 
@@ -257,5 +257,154 @@ export class DebugController {
                 this._logSymbolTree(symbol.children, depth + 1);
             }
         }
+    }
+
+    /**
+     * 诊断 LSP 类型层次获取 - 针对文件中所有的class/interface进行深入检测
+     * 用于排查为什么getTypeHierarchySupertypes返回0个extends/implements
+     */
+    public static async debugLSPTypeHierarchy(): Promise<void> {
+        const editor = vscode.window.activeTextEditor;
+
+        if (!editor) {
+            logger.warn('No active editor found');
+            logger.show();
+            return;
+        }
+
+        const uri = editor.document.uri;
+        const document = editor.document;
+
+        logger.info(`========== DIAGNOSIS: LSP Type Hierarchy Query ==========`);
+        logger.info(`File: ${uri.fsPath}`);
+
+        try {
+            // 获取所有符号
+            const symbols = await LSPService.getDocumentSymbols(uri);
+            if (!symbols || symbols.length === 0) {
+                logger.warn('No symbols found');
+                logger.show();
+                return;
+            }
+
+            logger.info(`\n[阶段1] 符号树扫描 - 查找所有class和interface`);
+            const classAndInterfaceSymbols = this._collectClassesAndInterfaces(symbols);
+            logger.info(`找到 ${classAndInterfaceSymbols.length} 个class/interface`);
+
+            if (classAndInterfaceSymbols.length === 0) {
+                logger.warn('No class or interface symbols found');
+                logger.show();
+                return;
+            }
+
+            logger.info(`\n[阶段2] 逐一诊断每个class/interface`);
+            for (let i = 0; i < classAndInterfaceSymbols.length; i++) {
+                const sym = classAndInterfaceSymbols[i];
+                const typeKind = vscode.SymbolKind[sym.kind];
+
+                logger.info(`\n▼ [${i + 1}/${classAndInterfaceSymbols.length}] ${sym.name} [${typeKind}]`);
+                logger.info(`   文件范围: 第${sym.range.start.line + 1}行 - 第${sym.range.end.line + 1}行`);
+
+                // 1. 提取声明头部文本（包含extends/implements）
+                logger.info(`\n   ├─ 步骤1: 提取声明头部文本...`);
+                const sigRange = new vscode.Range(sym.selectionRange.end, sym.range.end);
+                let sigText = document.getText(sigRange);
+                const braceIndex = sigText.indexOf('{');
+                if (braceIndex !== -1) {
+                    sigText = sigText.substring(0, braceIndex);
+                }
+                logger.info(`   │  声明头部: "${sigText}"`);
+
+                // 2. 在声明头部查找extends/implements关键字
+                logger.info(`\n   ├─ 步骤2: 解析declaration中的关键字...`);
+                const extendsMatch = sigText.match(/extends\s+([^{]+)/);
+                const implementsMatch = sigText.match(/implements\s+([^{]+)/);
+
+                if (extendsMatch) {
+                    logger.info(`   │  ✓ 找到 extends: "${extendsMatch[1].trim()}"`);
+                }
+                if (implementsMatch) {
+                    logger.info(`   │  ✓ 找到 implements: "${implementsMatch[1].trim()}"`);
+                }
+                if (!extendsMatch && !implementsMatch) {
+                    logger.info(`   │  ✗ 未找到extends或implements关键字`);
+                }
+
+                // 3. 调用 LSP getTypeHierarchySupertypes 获取类型信息
+                logger.info(`\n   ├─ 步骤3: 调用LSP getTypeHierarchySupertypes(selectionRange.start)...`);
+                logger.info(`   │  查询位置: (line ${sym.selectionRange.start.line}, char ${sym.selectionRange.start.character})`);
+
+                const supertypes = await LSPService.getTypeHierarchySupertypes(uri, sym.selectionRange.start);
+
+                if (!supertypes || supertypes.length === 0) {
+                    logger.warn(`   │  ✗ LSP返回空数组 (0个supertypes)`);
+                } else {
+                    logger.info(`   │  ✓ LSP返回 ${supertypes.length} 个supertype`);
+                    for (let j = 0; j < supertypes.length; j++) {
+                        const st = supertypes[j];
+                        logger.info(`   │    [${j + 1}] 名称: ${st.name}`);
+                        logger.info(`   │        URI: ${st.uri.fsPath}`);
+                        logger.info(`   │        范围: (${st.selectionRange.start.line}, ${st.selectionRange.start.character})`);
+
+                        // 尝试本地符号匹配
+                        if (st.uri.toString() === uri.toString()) {
+                            logger.info(`   │        位置: 本文件内`);
+                        } else {
+                            logger.info(`   │        位置: 外部文件`);
+                        }
+                    }
+                }
+
+                // 4. 匹配策略验证
+                logger.info(`\n   ├─ 步骤4: 关键字匹配验证...`);
+                if (supertypes && supertypes.length > 0) {
+                    const extendsText = extendsMatch ? extendsMatch[1] : '';
+                    const implementsText = implementsMatch ? implementsMatch[1] : '';
+
+                    for (const st of supertypes) {
+                        const superName = st.name;
+                        logger.info(`   │  检测supertype "${superName}":`);
+
+                        if (extendsText.includes(superName)) {
+                            logger.info(`   │    ✓ 在extends文本中找到: "${extendsText}"`);
+                        } else {
+                            logger.info(`   │    ✗ 在extends文本中未找到`);
+                        }
+
+                        if (implementsText.includes(superName)) {
+                            logger.info(`   │    ✓ 在implements文本中找到: "${implementsText}"`);
+                        } else {
+                            logger.info(`   │    ✗ 在implements文本中未找到`);
+                        }
+                    }
+                }
+
+            }
+
+            logger.info(`\n========== DIAGNOSIS COMPLETE ==========`);
+            logger.show();
+
+        } catch (error) {
+            logger.error(`Diagnosis failed: ${error}`);
+            logger.show();
+        }
+    }
+
+    /**
+     * 递归收集文件中所有的class和interface符号
+     */
+    private static _collectClassesAndInterfaces(symbols: vscode.DocumentSymbol[]): vscode.DocumentSymbol[] {
+        const result: vscode.DocumentSymbol[] = [];
+
+        for (const sym of symbols) {
+            if (sym.kind === vscode.SymbolKind.Class || sym.kind === vscode.SymbolKind.Interface) {
+                result.push(sym);
+            }
+            if (sym.children && sym.children.length > 0) {
+                result.push(...this._collectClassesAndInterfaces(sym.children));
+            }
+        }
+
+        return result;
     }
 }
