@@ -23,6 +23,33 @@ export class LSPService {
         }
     }
 
+    // 获取类型的父级结构信息（用于继承、实现扫描）
+    public static async getTypeHierarchySupertypes(uri: vscode.Uri, position: vscode.Position): Promise<vscode.TypeHierarchyItem[] | undefined> {
+        try {
+            // 1. 根据位置准备类型层次结构
+            const items = await vscode.commands.executeCommand<vscode.TypeHierarchyItem[]>(
+                'vscode.prepareTypeHierarchy',
+                uri,
+                position
+            );
+
+            if (!items || items.length === 0) {
+                return undefined;
+            }
+
+            // 2. 提供其父级类型
+            const supertypes = await vscode.commands.executeCommand<vscode.TypeHierarchyItem[]>(
+                'vscode.provideSupertypes',
+                items[0]
+            );
+
+            return supertypes;
+        } catch (err) {
+            logger.info(`[LSPService] 获取类型层次结构失败: ${uri.toString()}`);
+            return undefined;
+        }
+    }
+
     // 根据当前光标位置自动寻找并获取函数信息
     public static async getActiveFunction(): Promise<FunctionInfo | undefined> {
         const editor = vscode.window.activeTextEditor;
@@ -66,7 +93,7 @@ export class LSPService {
                 // 如果该符号有子符号，递归向深层找（例如类里的方法）
                 if (symbol.children && symbol.children.length > 0) {
                     const child = this._findSymbolAtPosition(symbol.children, pos);
-                    if (child) return child;
+                    if (child) { return child; }
                 }
                 return symbol;
             }

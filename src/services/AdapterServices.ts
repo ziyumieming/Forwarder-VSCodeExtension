@@ -87,6 +87,7 @@ export class AdapterService {
     /**
      * 仅快速提取单文档本地域节点基本信息，不发起外部跳转，用于局部物理信息覆盖
      */
+    //TODO:查证这个函数的作用和效率
     private static _extractBasicNodes(
         document: vscode.TextDocument,
         symbols: vscode.DocumentSymbol[],
@@ -97,7 +98,7 @@ export class AdapterService {
         for (const sym of symbols) {
             const nodeType = this._mapSymbolKindToNodeType(sym.kind);
             if (!nodeType) {
-                if (sym.children) this._extractBasicNodes(document, sym.children, uriString, namespace, nodes);
+                if (sym.children) { this._extractBasicNodes(document, sym.children, uriString, namespace, nodes); }
                 continue;
             }
             const id = `${uriString}#${nodeType}#${namespace}#${sym.name}`;
@@ -180,74 +181,58 @@ export class AdapterService {
                     sigText = sigText.substring(0, braceIndex);
                 }
 
-                // 简单的基于正则词法的启发式查找：选取非关键字的标识符调用定义跳转
-                const regex = /[a-zA-Z_$][a-zA-Z0-9_$]*/g;
-                let match;
-                // 要忽略的常用关键字
-                const ignoreKeywords = new Set([
-                    'extends', 'implements', 'class', 'interface', 'export', 'default', 'type',
-                    'public', 'private', 'protected', 'readonly'
-                ]);
+                // 通过 LSP 获取精确的类型层级（父类与接口）
+                const supertypes = await LSPService.getTypeHierarchySupertypes(document.uri, sym.selectionRange.start);
+                if (supertypes && supertypes.length > 0) {
+                    // 解析关键字帮助确定是 extends 还是 implements
+                    const extendsMatch = sigText.match(/extends\s+([^{]+)/);
+                    const implementsMatch = sigText.match(/implements\s+([^{]+)/);
 
-                while ((match = regex.exec(sigText)) !== null) {
-                    const word = match[0];
-                    if (ignoreKeywords.has(word)) continue;
+                    const extendsText = extendsMatch ? extendsMatch[1] : '';
+                    const implementsText = implementsMatch ? implementsMatch[1] : '';
 
-                    // 计算目标词汇在当前文档中的绝对位置以调用 LSP
-                    const wordOffset = document.offsetAt(sigRange.start) + match.index;
-                    const wordPos = document.positionAt(wordOffset);
+                    for (const superTypeItem of supertypes) {
+                        const targetUri = superTypeItem.uri;
+                        const targetRange = superTypeItem.selectionRange;
 
-                    try {
-                        const defs = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
-                            'vscode.executeDefinitionProvider',
-                            document.uri,
-                            wordPos
-                        );
+                        const targetInfo = await this._resolveSymbolInfo(targetUri, targetRange.start, symbolCache);
+                        if (targetInfo) {
+                            let relation: EdgeRelation = 'references';
+                            const superName = superTypeItem.name;
 
-                        if (defs && defs.length > 0) {
-                            const def = defs[0];
-                            const targetUri = 'uri' in def ? def.uri : def.targetUri;
-                            const targetRange = 'range' in def ? def.range : def.targetSelectionRange;
-
-                            // TODO: targetRange是做什么的？
-                            if (!targetRange) {
-                                continue;
-                            }
-
-                            // 进一步解析跳转目标的具体 SymbolKind 和嵌套层级，以构造正确的 ID 和关系
-                            const targetInfo = await this._resolveSymbolInfo(targetUri, targetRange.start, symbolCache);
-                            if (targetInfo) {
-                                let relation: EdgeRelation = 'references';
+                            // 判断在哪个关键字区域包含了该父节点名字
+                            if (extendsText.includes(superName)) {
+                                relation = 'extends';
+                            } else if (implementsText.includes(superName)) {
+                                relation = 'implements';
+                            } else {
+                                // 兜底策略：根据类型降级推断
                                 if (nodeType === 'class') {
-                                    if (targetInfo.type === 'class') relation = 'extends';
-                                    else if (targetInfo.type === 'interface') relation = 'implements';
+                                    if (targetInfo.type === 'class') { relation = 'extends'; }
+                                    else if (targetInfo.type === 'interface') { relation = 'implements'; }
                                 } else if (nodeType === 'interface') {
                                     relation = 'extends';
                                 }
-
-                                // 构建并在节点列表中加入外部/上下文文件的“占位节点”
-                                const targetNode: IRNode = {
-                                    id: targetInfo.id,
-                                    name: targetInfo.name,
-                                    type: targetInfo.type,
-                                    namespace: targetInfo.namespace || undefined,
-                                    location: {
-                                        uri: targetUri.toString(),
-                                        range: {
-                                            start: { line: targetRange.start.line, character: targetRange.start.character },
-                                            end: { line: targetRange.end.line, character: targetRange.end.character }
-                                        }
-                                    },
-                                    placeHolder: true
-                                };
-                                nodes.push(targetNode);
-
-                                // 构建扩展/实现关系边
-                                edges.push({ sourceId: id, targetId: targetInfo.id, relation });
                             }
+
+                            const targetNode: IRNode = {
+                                id: targetInfo.id,
+                                name: targetInfo.name,
+                                type: targetInfo.type,
+                                namespace: targetInfo.namespace || undefined,
+                                location: {
+                                    uri: targetUri.toString(),
+                                    range: {
+                                        start: { line: targetRange.start.line, character: targetRange.start.character },
+                                        end: { line: targetRange.end.line, character: targetRange.end.character }
+                                    }
+                                },
+                                placeHolder: true
+                            };
+                            nodes.push(targetNode);
+
+                            edges.push({ sourceId: id, targetId: targetInfo.id, relation });
                         }
-                    } catch (e) {
-                        // 忽略由于解析失败或无定义导致的错报
                     }
                 }
             }
@@ -273,7 +258,7 @@ export class AdapterService {
                 cache.set(uriStr, symbols);
             }
         }
-        if (!symbols) return undefined;
+        if (!symbols) { return undefined; }
 
         return this._findSymbolByPosition(symbols, uriStr, position, '');
     }
@@ -288,7 +273,7 @@ export class AdapterService {
                 // 优先看子节点是否更精准包裹着目标位置
                 if (sym.children && sym.children.length > 0) {
                     const childRes = this._findSymbolByPosition(sym.children, uriString, pos, childNamespace);
-                    if (childRes) return childRes;
+                    if (childRes) { return childRes; }
                 }
                 const nodeType = this._mapSymbolKindToNodeType(sym.kind);
                 if (nodeType) {
