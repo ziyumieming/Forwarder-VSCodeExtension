@@ -140,10 +140,10 @@ export class AnalysisRuntime {
         }
 
         // 如果当前队列是空的(不需要查其他人)，也顺手存个快照。是偶发的删除事件触发，仅在编辑器内删除时触发
-        //TODO:这里是同步的，是否会出问题？
-        if (this.taskQueue.length === 0 && this.syncService) {
+        //TODO:我觉得有必要将持久化只限制在队列处理完毕时，以维持单一入口。
+        /* if (this.taskQueue.length === 0 && this.syncService) {
             this.syncService.saveSnapshot(this.projectGraph, this.getSerializableTasks());
-        }
+        } */
     }
 
     /**

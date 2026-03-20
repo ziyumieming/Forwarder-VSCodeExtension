@@ -24,6 +24,10 @@
       {
         "command": "forwarder.debug.analyze",
         "title": "Debug: 检验流程通行性"
+      },
+      {
+        "command": "forwarder.debug.lspTypeHierarchy",
+        "title": "Debug: 诊断LSP类型层次查询 - 检查extends/implements"
       }
     ],
     "viewsContainers": {

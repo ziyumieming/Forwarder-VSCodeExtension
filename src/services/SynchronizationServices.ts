@@ -53,8 +53,7 @@ export class SynchronizationService {
                 return [source, relArray];
             });
 
-            // 序列化 inEdges
-            // TODO: 目前 outEdges 和 inEdges 是冗余存储的，理论上只需要存储其中一个，另一个可以通过遍历构建。但为了简化实现和查询效率，这里暂时都存储。未来可以考虑优化为只存储 outEdges。
+            // 序列化 inEdges：outEdges 和 inEdges 是冗余存储的，理论上只需要存储其中一个，另一个可以通过遍历构建。为了简化实现和查询效率，这里都存储。
             const inEdgesArray = Array.from(graph.inEdges.entries()).map(([target, relations]) => {
                 const relArray = Array.from(relations.entries()).map(([rel, sources]) => [rel, Array.from(sources)]);
                 return [target, relArray];
