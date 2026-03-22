@@ -1,5 +1,6 @@
 ﻿import { ProjectGraph } from '../models/GraphManager';
 import { IRNode, EdgeData, EdgeRelation, GraphViewData } from '../models/GraphDefinition';
+import { logger } from '../utils/logger';
 
 
 export class ViewQueryService {
@@ -21,6 +22,9 @@ export class ViewQueryService {
 
         // 从图中实体出完整的 IRNode 信息
         const nodes = graph.getNodes(nodeIds);
+
+        // 边界情况防护：验证并记录悬空边
+        this._verifyEdgesAndNodes(edges, nodes, '[queryGlobalRelation]');
 
         return { nodes, edges };
     }
@@ -46,6 +50,24 @@ export class ViewQueryService {
 
         const nodes = graph.getNodes(nodeIds);
 
+        // 边界情况防护：验证并记录悬空边
+        this._verifyEdgesAndNodes(edges, nodes, '[queryNodeDependencies]');
+
         return { nodes, edges };
+    }
+
+    /**
+     * 检验提取出的 Nodes 中是否完整的包含了 Edges 的源/目标端点。如果缺失则输出警告。
+     */
+    private static _verifyEdgesAndNodes(edges: EdgeData[], nodes: IRNode[], contextTag: string): void {
+        const retrievedNodeIds = new Set(nodes.map(n => n.id));
+        for (const edge of edges) {
+            if (!retrievedNodeIds.has(edge.sourceId)) {
+                logger.warn(`[ViewQueryService] ${contextTag} 边中预期的源节点不存在于节点列表中: ${edge.sourceId}. Edge详情: ${JSON.stringify(edge)}`);
+            }
+            if (!retrievedNodeIds.has(edge.targetId)) {
+                logger.warn(`[ViewQueryService] ${contextTag} 边中预期的目标节点不存在于节点列表中: ${edge.targetId}. Edge详情: ${JSON.stringify(edge)}`);
+            }
+        }
     }
 }
