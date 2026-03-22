@@ -168,9 +168,9 @@ export class ProjectGraph {
     private _syncFileOutEdges(nodeIds: string[], expectedEdges: EdgeData[]): void {
         const expectedMap = new Map<string, Map<EdgeRelation, Set<string>>>();
         for (const edge of expectedEdges) {
-            if (!expectedMap.has(edge.sourceId)) expectedMap.set(edge.sourceId, new Map());
+            if (!expectedMap.has(edge.sourceId)) { expectedMap.set(edge.sourceId, new Map()); }
             const relMap = expectedMap.get(edge.sourceId)!;
-            if (!relMap.has(edge.relation)) relMap.set(edge.relation, new Set());
+            if (!relMap.has(edge.relation)) { relMap.set(edge.relation, new Set()); }
             relMap.get(edge.relation)!.add(edge.targetId);
         }
 
@@ -178,7 +178,7 @@ export class ProjectGraph {
             const expectedRels = expectedMap.get(sourceId);
             const currentRels = this.outEdges.get(sourceId);
 
-            if (!expectedRels && !currentRels) continue;
+            if (!expectedRels && !currentRels) { continue; }
 
             // Compute edges to remove
             if (currentRels) {
