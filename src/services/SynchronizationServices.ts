@@ -25,24 +25,48 @@ export interface WorkspaceChanges {
     renamed: { oldUri: vscode.Uri; newUri: vscode.Uri }[];
 }
 
-export interface SerializedTask {
-    uri: string;
-    reason: string;
-    cascade: boolean;
-}
-
 export class SynchronizationService {
     private storagePath: string;
+    private indexPath: string;
     private fileIndex: FileIndexSnapshot = {};
 
     constructor(storagePath: string) {
         this.storagePath = storagePath;
+        this.indexPath = storagePath.replace('graph_snapshot.json', 'workspace_index.json');
+    }
+
+    /**
+     * 加载独立的文件索引
+     */
+    public async loadFileIndex(): Promise<void> {
+        if (!fs.existsSync(this.indexPath)) {
+            this.fileIndex = {};
+            return;
+        }
+        try {
+            const content = await fs.promises.readFile(this.indexPath, 'utf8');
+            this.fileIndex = JSON.parse(content);
+        } catch (error: any) {
+            logger.info(`[SyncService] 读取文件索引失败: ${error.message}，将重建索引。`);
+            this.fileIndex = {};
+        }
+    }
+
+    /**
+     * 保存独立的文件索引
+     */
+    public async saveFileIndex(): Promise<void> {
+        try {
+            await fs.promises.writeFile(this.indexPath, JSON.stringify(this.fileIndex, null, 2), 'utf8');
+        } catch (error: any) {
+            logger.info(`[SyncService] 保存文件索引失败: ${error.message}`);
+        }
     }
 
     /**
      * 将当前图数据结构和文件修改时间索引序列化到本地存储
      */
-    public async saveSnapshot(graph: ProjectGraph, taskQueue: SerializedTask[] = []): Promise<void> {
+    public async saveSnapshot(graph: ProjectGraph): Promise<void> {
         try {
             // 序列化 nodes (Map -> Array)
             const nodesArray = Array.from(graph.nodes.entries());
@@ -64,10 +88,9 @@ export class SynchronizationService {
                     nodes: nodesArray,
                     outEdges: outEdgesArray,
                     inEdges: inEdgesArray,
+                    // 注意：这里保存的是 LSP 语义指纹，用于对比分析阶段的 AST 提取是否改变。与 workspace_index 中的物理文件 MD5 哈希互相独立。
                     fileFingerprints: Array.from(graph.fileFingerprints.entries())
-                },
-                index: this.fileIndex,
-                taskQueue
+                }
             };
 
             const dir = path.dirname(this.storagePath);
@@ -84,19 +107,16 @@ export class SynchronizationService {
 
     /**
      * 从本地存储反序列化并还原图数据结构和文件索引
-     * @returns 返回未完成的分析任务队列
      */
-    public async loadSnapshot(graph: ProjectGraph): Promise<SerializedTask[]> {
+    public async loadSnapshot(graph: ProjectGraph): Promise<void> {
         if (!fs.existsSync(this.storagePath)) {
             logger.info(`[SyncService] 未找到本地快照，将从零开始构建图数据。`);
-            return [];
+            return;
         }
 
         try {
             const fileContent = await fs.promises.readFile(this.storagePath, 'utf8');
             const data = JSON.parse(fileContent);
-
-            this.fileIndex = data.index || {};
 
             if (data.graph) {
                 // 还原 nodes 及 fileNodes 关联索引
@@ -144,11 +164,10 @@ export class SynchronizationService {
                 }
             }
             logger.info(`[SyncService] 本地快照加载成功。`);
-            return data.taskQueue || [];
+            return;
         } catch (error: any) {
             logger.info(`[SyncService] 读取或解析快照出错: ${error.message}，将视为无缓存启动。`);
-            this.fileIndex = {};
-            return [];
+            return;
         }
     }
 
@@ -296,20 +315,53 @@ export class SynchronizationService {
             }
         }
 
+        // 统一保存一次索引
+        await this.saveFileIndex();
+
         return changes;
     }
 
     /**
      * 重置缓存以强制下一次实行全量重新扫描
      */
-    public clearIndex(): void {
+    public async clearIndex(): Promise<void> {
         this.fileIndex = {};
+        await this.saveFileIndex();
     }
 
     /**
-     * 手动从快照索引中移除该文件
+     * 新增或更新文件在快照索引中的状态并保存
      */
-    public removeFileFromIndex(uri: vscode.Uri): void {
+    public async addOrUpdateFileInIndex(uri: vscode.Uri): Promise<void> {
+        const fsPath = uri.fsPath;
+        try {
+            const stat = await fs.promises.stat(fsPath);
+            const mtimeMs = stat.mtimeMs;
+            const hash = await this.computeFileHash(fsPath);
+            this.fileIndex[uri.toString()] = { mtimeMs, hash };
+            await this.saveFileIndex();
+        } catch (err: any) {
+            logger.info(`[SyncService] 更新文件索引失败: ${err.message}`);
+        }
+    }
+
+    /**
+     * 手动从快照索引中移除该文件并保存
+     */
+    public async removeFileFromIndex(uri: vscode.Uri): Promise<void> {
         delete this.fileIndex[uri.toString()];
+        await this.saveFileIndex();
+    }
+
+    /**
+     * 更新被重命名文件在快照索引中的键名并保存
+     */
+    public async renameFileInIndex(oldUri: vscode.Uri, newUri: vscode.Uri): Promise<void> {
+        const entry = this.fileIndex[oldUri.toString()];
+        if (entry) {
+            this.fileIndex[newUri.toString()] = entry;
+            delete this.fileIndex[oldUri.toString()];
+            await this.saveFileIndex();
+        }
     }
 }

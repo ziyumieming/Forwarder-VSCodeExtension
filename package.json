@@ -3,6 +3,7 @@
   "displayName": "Forwarder",
   "description": "Design of VSCode Intelligent Visual Analysis Plugin for Code Understanding",
   "version": "0.0.1",
+  "publisher": "ziyumieming",
   "engines": {
     "vscode": "^1.107.1"
   },

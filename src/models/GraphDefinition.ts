@@ -43,3 +43,11 @@ export interface GraphViewData {
     nodes: IRNode[];
     edges: EdgeData[];
 }
+
+export interface FileSymbolsPayload {
+    uri: string;
+    nodes: IRNode[];
+    edges: EdgeData[];
+    unchanged?: boolean;
+    fingerprint?: string;
+}

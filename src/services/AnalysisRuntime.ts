@@ -1,4 +1,4 @@
-﻿import * as vscode from 'vscode';
+import * as vscode from 'vscode';
 import { ProjectGraph } from '../models/GraphManager';
 import { AdapterService } from './AdapterServices';
 import { ViewQueryService } from './ViewServices';
@@ -25,6 +25,7 @@ export class AnalysisRuntime {
     private renameListener?: vscode.Disposable;
     private deleteListener?: vscode.Disposable;
     private saveListener?: vscode.Disposable;
+    private createListener?: vscode.Disposable;
 
     // 分析调度队列
     private taskQueue: AnalysisTask[] = [];
@@ -74,10 +75,14 @@ export class AnalysisRuntime {
                 logger.info(`[AnalysisRuntime] 检测到文件重命名: ${file.oldUri.fsPath} -> ${file.newUri.fsPath}`);
                 this.projectGraph.renameFile(file.oldUri.toString(), file.newUri.toString());
                 if (this.syncService) {
-                    this.syncService.removeFileFromIndex(file.oldUri);
-                    // 重新解析被重命名的文件，更新索引及节点信息
-                    this.enqueueTask(file.newUri, '重命名修正重查', true);
+                    await this.syncService.renameFileInIndex(file.oldUri, file.newUri);
+                    // 不再需要触发此文件的重新扫描，因为仅更名未改变内容
                 }
+            }
+
+            // 为保证重命名状态尽快固化，在没有任务积压时执行一遍快照
+            if (this.taskQueue.length === 0 && this.syncService) {
+                this.syncService.saveSnapshot(this.projectGraph);
             }
         });
 
@@ -91,13 +96,31 @@ export class AnalysisRuntime {
             }
         });
 
+        // 注册创建事件监听器 (用于抵消删除及处理新建)
+        //在工作区打开时删除一个文件后马上在防抖期内向工作区加入一个不同内容的同名文件也会触发新建，只有新建事件能接收到这个变化，所以不得不入队
+        if (this.createListener) {
+            this.createListener.dispose();
+        }
+        this.createListener = vscode.workspace.onDidCreateFiles(async e => {
+            for (const file of e.files) {
+                const uriStr = file.toString();
+                if (this.syncService) {
+                    await this.syncService.addOrUpdateFileInIndex(file);
+                }
+                this.enqueueTask(file, '监听发现文件新增', true);//在队列的开头会取消等待的删除
+            }
+        });
+
         // 注册保存事件监听器
         if (this.saveListener) {
             this.saveListener.dispose();
         }
-        this.saveListener = vscode.workspace.onDidSaveTextDocument(doc => {
+        this.saveListener = vscode.workspace.onDidSaveTextDocument(async doc => {
             if (doc.uri.scheme === 'file') {
                 logger.info(`[AnalysisRuntime] 文件保存触发重扫: ${doc.uri.fsPath}`);
+                if (this.syncService) {
+                    await this.syncService.addOrUpdateFileInIndex(doc.uri);
+                }
                 this.enqueueTask(doc.uri, '文件保存后触发重新同步解析', true);
             }
         });
@@ -114,13 +137,15 @@ export class AnalysisRuntime {
         // 5秒防抖延迟
         const timer = setTimeout(() => {
             this.pendingDeletions.delete(uriStr);
-            this.executeDeletion(uri);
+            this.executeDeletion(uri).catch(err => {
+                logger.info(`[AnalysisRuntime] 删除调度执行失败: ${err.message}`);
+            });
         }, 5000);
 
         this.pendingDeletions.set(uriStr, timer);
     }
 
-    private executeDeletion(uri: vscode.Uri): void {
+    private async executeDeletion(uri: vscode.Uri): Promise<void> {
         logger.info(`[AnalysisRuntime] 执行文件图结构删除与级联清理: ${uri.fsPath}`);
 
         // 1. 将删除事实同步给图管理器，得到被影响的文件
@@ -128,7 +153,7 @@ export class AnalysisRuntime {
 
         // 2. 从本地缓存索引中移除该文件
         if (this.syncService) {
-            this.syncService.removeFileFromIndex(uri);
+            await this.syncService.removeFileFromIndex(uri);
         }
 
         // 3. 处理受影响文件的级联调度
@@ -138,12 +163,6 @@ export class AnalysisRuntime {
                 this.enqueueTask(affectedUri, `引用的源文件 ${uri.fsPath} 被删除引起的级联更新`, false);
             }
         }
-
-        // 如果当前队列是空的(不需要查其他人)，也顺手存个快照。是偶发的删除事件触发，仅在编辑器内删除时触发
-        //TODO:我觉得有必要将持久化只限制在队列处理完毕时，以维持单一入口。
-        /* if (this.taskQueue.length === 0 && this.syncService) {
-            this.syncService.saveSnapshot(this.projectGraph, this.getSerializableTasks());
-        } */
     }
 
     /**
@@ -168,7 +187,8 @@ export class AnalysisRuntime {
         logger.info('[AnalysisRuntime] 开始启动增量同步...');
 
         // 1. 加载本地持久化快照与积压队列
-        const savedQueue = await this.syncService.loadSnapshot(this.projectGraph);
+        await this.syncService.loadSnapshot(this.projectGraph);
+        await this.syncService.loadFileIndex();
 
         // 2. 将快照中的索引与当前工作区真实文件对比
         const changes = await this.syncService.scanWorkspaceChanges();
@@ -178,7 +198,7 @@ export class AnalysisRuntime {
             for (const rename of changes.renamed) {
                 logger.info(`[AnalysisRuntime] 处理文件重命名 (增量同步): ${rename.oldUri.fsPath} -> ${rename.newUri.fsPath}`);
                 this.projectGraph.renameFile(rename.oldUri.toString(), rename.newUri.toString());
-                this.syncService.removeFileFromIndex(rename.oldUri);
+                await this.syncService.removeFileFromIndex(rename.oldUri);
             }
         }
 
@@ -213,31 +233,15 @@ export class AnalysisRuntime {
             this.enqueueTask(uri, '增量扫描发现文件修改/新增', true);
         }
 
-        // 4. 处理被删除的文件 （直接执行，脱机删除不需要防抖）
+        // 5. 处理被删除的文件 （直接执行，脱机删除不需要防抖）
         for (const uri of changes.deleted) {
             logger.info(`[AnalysisRuntime] 增量发现文件已删除: ${uri.fsPath}`);
-            this.executeDeletion(uri);
-        }
-
-        // 5. 恢复由于关机等原因中断的任务队列 (必须在执行完增减判定后恢复，以防试图恢复已删除的文件)
-        const deletedUriStrs = new Set(changes.deleted.map(u => u.toString()));
-        for (const task of savedQueue) {
-            // 确保任务对应的文件既没有在此次离线期间被删除，并且也能被 VS Code 文件系统读取到
-            if (!deletedUriStrs.has(task.uri)) {
-                try {
-                    const targetUri = vscode.Uri.parse(task.uri);
-                    await vscode.workspace.fs.stat(targetUri);
-                    this.enqueueTask(targetUri, task.reason + ' (从上一次历史会话恢复)', task.cascade);
-                } catch (err) {
-                    logger.info(`[AnalysisRuntime] 无法恢复任务对应的文件 ${task.uri}，可能已被删除或无法访问，已跳过恢复。`);
-                    //TODO：是否有必要处理该异常？
-                }
-            }
+            await this.executeDeletion(uri);
         }
 
         // 若队列中没有任务，直接保存快照；否则通过队列后续保存
         if (this.taskQueue.length === 0) {
-            await this.syncService.saveSnapshot(this.projectGraph, this.getSerializableTasks());
+            await this.syncService.saveSnapshot(this.projectGraph);
             logger.info('[AnalysisRuntime] 增量同步完成！无新增更新项。');
         }
     }
@@ -253,7 +257,7 @@ export class AnalysisRuntime {
             clearTimeout(this.pendingDeletions.get(uriStr));
             this.pendingDeletions.delete(uriStr);
             logger.info(`[AnalysisRuntime] 文件 ${uri.fsPath} 在删除防抖期内发生了更新或撤回，已取消图结构的删除操作`);
-            //TODO: 无修改入队会发生什么？
+            //TODO: 无修改入队会发生什么？是否只有创建会触发这个分支？
         }
 
         const existingIndex = this.taskQueue.findIndex(t => t.uri.toString() === uriStr);
@@ -416,6 +420,9 @@ export class AnalysisRuntime {
         }
         if (this.saveListener) {
             this.saveListener.dispose();
+        }
+        if (this.createListener) {
+            this.createListener.dispose();
         }
         for (const timer of this.pendingDeletions.values()) {
             clearTimeout(timer);

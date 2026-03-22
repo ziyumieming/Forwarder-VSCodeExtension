@@ -23,7 +23,11 @@ export function activate(context: vscode.ExtensionContext) {
 	const analysisProvider = new AnalysisViewProvider(context.extensionUri);
 	const analysisController = new AnalysisController(analysisProvider, runtime);
 
-	context.subscriptions.push(vscode.window.registerWebviewViewProvider('forwarder-view', analysisProvider));
+	context.subscriptions.push(vscode.window.registerWebviewViewProvider('forwarder-view', analysisProvider, {
+		webviewOptions: {
+			retainContextWhenHidden: true
+		}
+	}));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.analyze', () => analysisController.handleAnalyzeActiveFileCommand()));
 	// Debug commands
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.analyze', () => DebugController.debugAnalyzeCurrentFile()));
