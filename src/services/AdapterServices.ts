@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
-import { IRNode, NodeType, EdgeData } from '../models/GraphDefinition';
-import { FileSymbolsPayload } from '../models/GraphManager';
+import { IRNode, NodeType, EdgeData, FileSymbolsPayload } from '../models/GraphDefinition';
 import { LSPService } from './LSPServices';
 import { InheritanceExtractor } from '../adapters/InheritanceExtractor';
 import { SymbolRule } from '../models/SymbolRule';

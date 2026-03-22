@@ -22,7 +22,11 @@ export function activate(context: vscode.ExtensionContext) {
 	const analysisProvider = new AnalysisViewProvider(context.extensionUri);
 	const analysisController = new AnalysisController(analysisProvider, runtime);
 
-	context.subscriptions.push(vscode.window.registerWebviewViewProvider('forwarder-view', analysisProvider));
+	context.subscriptions.push(vscode.window.registerWebviewViewProvider('forwarder-view', analysisProvider, {
+		webviewOptions: {
+			retainContextWhenHidden: true
+		}
+	}));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.analyze', () => analysisController.handleAnalyzeActiveFileCommand()));
 
 	// 将 runtime 也加入销毁队列，保证退出时解除设置监听

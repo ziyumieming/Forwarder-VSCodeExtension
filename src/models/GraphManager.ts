@@ -1,12 +1,5 @@
-import { IRNode, EdgeRelation, AdjacencyMap, EdgeData } from "./GraphDefinition";
+import { IRNode, EdgeRelation, AdjacencyMap, EdgeData, FileSymbolsPayload } from "./GraphDefinition";
 
-export interface FileSymbolsPayload {
-    uri: string;
-    nodes: IRNode[];
-    edges: EdgeData[];
-    unchanged?: boolean;
-    fingerprint?: string;
-}
 
 export class ProjectGraph {
     // 节点池 (ID -> IRNode)
