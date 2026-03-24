@@ -13,9 +13,26 @@ export function activate(context: vscode.ExtensionContext) {
 	// 初始化顶层服务运行时单例
 	const runtime = AnalysisRuntime.getInstance();
 
-	// 设置持久化位置，并在此时启动异步增量扫描（非阻塞主体激活任务）
-	const storagePath = vscode.Uri.joinPath(context.globalStorageUri, 'graph_snapshot.json').fsPath;
-	runtime.initialize(storagePath);
+	// 设置按工作区隔离的持久化位置，并在此时启动异步增量扫描
+	let storageDir: string;
+	let isSingleFileMode = false;
+	let singleFileUriStr: string | undefined;
+
+	if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+		// 原生支持的工作区级存储，若由于未保存工作区等原因不存在则 fallback 到 global 加上首个根目录名
+		if (context.storageUri) {
+			storageDir = context.storageUri.fsPath;
+		} else {
+			storageDir = vscode.Uri.joinPath(context.globalStorageUri, vscode.workspace.workspaceFolders[0].name).fsPath;
+		}
+	} else {
+		// 单文件模式回退到 globalStorage 中的单独目录，并在 manifest 标识该文件
+		storageDir = vscode.Uri.joinPath(context.globalStorageUri, "single_file_mode").fsPath;
+		isSingleFileMode = true;
+		singleFileUriStr = vscode.window.activeTextEditor?.document.uri.toString();
+	}
+
+	runtime.initialize(storageDir, isSingleFileMode, singleFileUriStr);
 	runtime.runIncrementalSync().catch(err => {
 		logger.info(`后台增量同步启动失败：${err}`);
 	});

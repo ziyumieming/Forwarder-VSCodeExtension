@@ -26,13 +26,91 @@ export interface WorkspaceChanges {
 }
 
 export class SynchronizationService {
+    private storageDir: string;
     private storagePath: string;
     private indexPath: string;
+    private manifestPath: string;
+    private pendingPath: string;
     private fileIndex: FileIndexSnapshot = {};
+    private isSingleFileMode: boolean;
+    private singleFileUri?: string;
 
-    constructor(storagePath: string) {
-        this.storagePath = storagePath;
-        this.indexPath = storagePath.replace('graph_snapshot.json', 'workspace_index.json');
+    public static readonly SCHEMA_VERSION = 1;
+
+    constructor(storageDir: string, isSingleFileMode: boolean = false, singleFileUri?: string) {
+        this.storageDir = storageDir;
+        this.storagePath = path.join(storageDir, 'graph_snapshot.json');
+        this.indexPath = path.join(storageDir, 'workspace_index.json');
+        this.manifestPath = path.join(storageDir, 'manifest.json');
+        this.pendingPath = path.join(storageDir, 'pending_tasks.json');
+        this.isSingleFileMode = isSingleFileMode;
+        this.singleFileUri = singleFileUri;
+    }
+
+    /**
+     * 检查版本清单，如果版本不匹配或处于单文件模式且目标不一致，则清空缓存并返回 true
+     */
+    public async checkAndInitManifest(): Promise<boolean> {
+        if (!fs.existsSync(this.storageDir)) {
+            await fs.promises.mkdir(this.storageDir, { recursive: true });
+        }
+
+        let needsWipe = false;
+
+        if (fs.existsSync(this.manifestPath)) {
+            try {
+                const content = await fs.promises.readFile(this.manifestPath, 'utf8');
+                const manifest = JSON.parse(content);
+                if (manifest.schemaVersion !== SynchronizationService.SCHEMA_VERSION) {
+                    needsWipe = true;
+                    logger.info(`[SyncService] 持久化 Schema 版本不匹配 (发现 ${manifest.schemaVersion}, 期望 ${SynchronizationService.SCHEMA_VERSION})，将清空旧的存储重扫。`);
+                } else if (this.isSingleFileMode) {
+                    if (manifest.singleFileModeUri !== this.singleFileUri) {
+                        needsWipe = true;
+                        logger.info(`[SyncService] 单文件模式目标发生改变，将清空旧的存储重扫。`);
+                    }
+                }
+            } catch (e: any) {
+                needsWipe = true;
+                logger.info(`[SyncService] 读取 manifest 失败: ${e.message}，将清空存储。`);
+            }
+        } else {
+            // 没有 manifest 视为旧版本或首次运行
+            needsWipe = true;
+        }
+
+        if (needsWipe) {
+            await this.wipeStorage();
+            await this.saveManifest();
+            return true;
+        }
+        return false;
+    }
+
+    private async wipeStorage(): Promise<void> {
+        const filesToWipe = [this.storagePath, this.indexPath, this.pendingPath];
+        for (const file of filesToWipe) {
+            if (fs.existsSync(file)) {
+                try {
+                    await fs.promises.unlink(file);
+                } catch (e) {
+                    // ignore
+                }
+            }
+        }
+        this.fileIndex = {};
+    }
+
+    private async saveManifest(): Promise<void> {
+        const manifest = {
+            schemaVersion: SynchronizationService.SCHEMA_VERSION,
+            singleFileModeUri: this.isSingleFileMode ? this.singleFileUri : undefined
+        };
+        try {
+            await fs.promises.writeFile(this.manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+        } catch (e: any) {
+            logger.info(`[SyncService] 无法保存 manifest: ${e.message}`);
+        }
     }
 
     /**
@@ -188,10 +266,9 @@ export class SynchronizationService {
      * 同步保存尚未处理完毕的队列内容
      */
     public savePendingTasksSync(tasks: PendingTaskData[]): void {
-        const pendingPath = this.storagePath.replace('graph_snapshot.json', 'pending_tasks.json');//保证相同文件夹
         try {
-            fs.writeFileSync(pendingPath, JSON.stringify(tasks, null, 2), 'utf8');
-            logger.info(`[SyncService] 未完成队列表已同步保存至: ${pendingPath}`);
+            fs.writeFileSync(this.pendingPath, JSON.stringify(tasks, null, 2), 'utf8');
+            logger.info(`[SyncService] 未完成队列表已同步保存至: ${this.pendingPath}`);
         } catch (e: any) {
             logger.info(`[SyncService] 保存未完成队列失败: ${e.message}`);
         }
@@ -201,11 +278,10 @@ export class SynchronizationService {
      * 同步加载上次关闭时未处理完毕的队列，读取后即刻将其删除
      */
     public loadPendingTasksSync(): PendingTaskData[] {
-        const pendingPath = this.storagePath.replace('graph_snapshot.json', 'pending_tasks.json');
-        if (fs.existsSync(pendingPath)) {
+        if (fs.existsSync(this.pendingPath)) {
             try {
-                const content = fs.readFileSync(pendingPath, 'utf8');
-                fs.unlinkSync(pendingPath); // 恢复即删除，防止后续重复读取污染
+                const content = fs.readFileSync(this.pendingPath, 'utf8');
+                fs.unlinkSync(this.pendingPath); // 恢复即删除，防止后续重复读取污染
                 return JSON.parse(content) as PendingTaskData[];
             } catch (e: any) {
                 logger.info(`[SyncService] 读取未完成队列失败: ${e.message}`);
