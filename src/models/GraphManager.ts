@@ -18,6 +18,17 @@ export class ProjectGraph {
     public fileFingerprints: Map<string, string> = new Map();
 
     /**
+     * 清空整张图（用于过滤规则改变或存储版本不匹配时的冷启动）
+     */
+    public clearAll(): void {
+        this.nodes.clear();
+        this.outEdges.clear();
+        this.inEdges.clear();
+        this.fileNodes.clear();
+        this.fileFingerprints.clear();
+    }
+
+    /**
      * 供持久化模块调用的接口：重命名工作区文件，更新相关的节点及其边
      */
     public renameFile(oldUri: string, newUri: string): void {

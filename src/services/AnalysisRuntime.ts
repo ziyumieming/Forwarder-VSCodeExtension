@@ -3,6 +3,7 @@ import { ProjectGraph } from '../models/GraphManager';
 import { AdapterService } from './AdapterServices';
 import { ViewQueryService } from './ViewServices';
 import { SynchronizationService } from './SynchronizationServices';
+import { GatingService } from './GatingServices';
 import { EdgeRelation, GraphViewData } from '../models/GraphDefinition';
 import { logger } from '../utils/logger';
 
@@ -48,18 +49,21 @@ export class AnalysisRuntime {
     /**
      * 运行时初始化：传入持久化路径（如 context.globalStorageUri 或者 workspaceStorageUri）
      */
-    public initialize(storagePath: string) {
-        this.syncService = new SynchronizationService(storagePath);
+    public initialize(storageDir: string, isSingleFileMode: boolean = false, singleFileUri?: string) {
+        this.syncService = new SynchronizationService(storageDir, isSingleFileMode, singleFileUri);
 
         // 注册设置修改监听器
         if (this.configChangeListener) {
             this.configChangeListener.dispose();
         }
-        this.configChangeListener = vscode.workspace.onDidChangeConfiguration(e => {
+        this.configChangeListener = vscode.workspace.onDidChangeConfiguration(async e => {
             if (e.affectsConfiguration('forwarder.analysis.includePattern') ||
                 e.affectsConfiguration('forwarder.analysis.excludePattern')) {
                 logger.info('[AnalysisRuntime] 检测到扫描过滤规则修改，正在重置索引并重新发起全量扫描...');
-                this.syncService?.clearIndex();
+                if (this.syncService) {
+                    await this.syncService.clearIndex();
+                }
+                this.projectGraph.clearAll();
                 this.runIncrementalSync().catch(err => {
                     logger.info(`[AnalysisRuntime] 重新扫描失败: ${err}`);
                 });
@@ -81,7 +85,7 @@ export class AnalysisRuntime {
             }
 
             // 为保证重命名状态尽快固化，在没有任务积压时执行一遍快照
-            if (this.taskQueue.length === 0 && this.syncService) {
+            if (this.taskQueue.length === 0 && !this.isProcessing && this.syncService) {
                 this.syncService.saveSnapshot(this.projectGraph);
             }
         });
@@ -163,6 +167,11 @@ export class AnalysisRuntime {
                 this.enqueueTask(affectedUri, `引用的源文件 ${uri.fsPath} 被删除引起的级联更新`, false);
             }
         }
+
+        // 如果没有波及其他文件，队列为空，我们也必须在此当即固化一次快照，以确保图节点删除得到持久化
+        if (this.taskQueue.length === 0 && !this.isProcessing && this.syncService) {
+            await this.syncService.saveSnapshot(this.projectGraph);
+        }
     }
 
     /**
@@ -186,9 +195,19 @@ export class AnalysisRuntime {
 
         logger.info('[AnalysisRuntime] 开始启动增量同步...');
 
+        // 0. 校验持久化架构版本和单文件作用域变化，判断是否需要重置存储
+        const didWipe = await this.syncService.checkAndInitManifest();
+        if (didWipe) {
+            logger.info('[AnalysisRuntime] 侦测到缓存已被擦除，将进行全量冷启动。');
+            // 清理本身的索引并让图为空
+            this.projectGraph.clearAll();
+        }
+
         // 1. 加载本地持久化快照与积压队列
-        await this.syncService.loadSnapshot(this.projectGraph);
-        await this.syncService.loadFileIndex();
+        if (!didWipe) {
+            await this.syncService.loadSnapshot(this.projectGraph);
+            await this.syncService.loadFileIndex();
+        }
 
         // 2. 将快照中的索引与当前工作区真实文件对比
         const changes = await this.syncService.scanWorkspaceChanges();
@@ -240,7 +259,7 @@ export class AnalysisRuntime {
         }
 
         // 若队列中没有任务，直接保存快照；否则通过队列后续保存
-        if (this.taskQueue.length === 0) {
+        if (this.taskQueue.length === 0 && !this.isProcessing) {
             await this.syncService.saveSnapshot(this.projectGraph);
             logger.info('[AnalysisRuntime] 增量同步完成！无新增更新项。');
         }
@@ -296,6 +315,13 @@ export class AnalysisRuntime {
                 logger.info(`[AnalysisRuntime] 分析队列执行文件: ${task.uri.fsPath} (原因: ${task.reason})`);
 
                 try {
+                    const isReady = await GatingService.waitAndCheckLSPForFile(task.uri);
+                    if (!isReady) {
+                        logger.info(`[AnalysisRuntime] 无法挂载语言服务或文件被阻止，跳过此文件: ${task.uri.fsPath}`);
+                        this.activeTask = undefined;
+                        continue;
+                    }
+
                     const affectedUris = await this.doAnalyzeFile(task.uri);
 
                     // 5. 如果开启了级联发现相关被波及文件，需要入队重新扫描它，但它的结果不再级联
@@ -313,13 +339,20 @@ export class AnalysisRuntime {
             }
 
             // 队列全部消费完毕后，固化保存最新的全图一次
-            if (this.syncService) {
+            if (this.syncService && this.uncommittedTasks.size > 0) {
                 await this.syncService.saveSnapshot(this.projectGraph);
                 this.uncommittedTasks.clear(); // 保存成功后清空未提交记录
                 logger.info('[AnalysisRuntime] 调度队列全部处理完成，数据流更新并固化本地完毕！');
             }
         } finally {
             this.isProcessing = false;
+
+            // 防御性检查：如果在固化快照（await）等异步操作期间又有新任务入队，则重新启动处理
+            if (this.taskQueue.length > 0) {
+                this._processTaskQueue().catch(err => {
+                    logger.info(`[AnalysisRuntime] 追加队列处理异常: ${err.message}`);
+                });
+            }
         }
     }
 
