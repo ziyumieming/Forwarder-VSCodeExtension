@@ -396,13 +396,13 @@ export class AnalysisRuntime {
     }
 
     // 编排调用: 查询全局视图
-    public queryGlobalRelation(relation: EdgeRelation): GraphViewData {
-        return ViewQueryService.queryGlobalRelation(this.projectGraph, relation);
+    public queryGlobalRelation(relations: EdgeRelation[], includeExternal?: boolean): GraphViewData {
+        return ViewQueryService.queryGlobalRelation(this.projectGraph, relations, includeExternal);
     }
 
     // 编排调用: 查询节点依赖
-    public queryNodeDependencies(nodeId: string, allowedRelations?: EdgeRelation[]): GraphViewData {
-        return ViewQueryService.queryNodeDependencies(this.projectGraph, nodeId, allowedRelations);
+    public queryNodeDependencies(nodeId: string, allowedRelations?: EdgeRelation[], includeExternal?: boolean): GraphViewData {
+        return ViewQueryService.queryNodeDependencies(this.projectGraph, nodeId, allowedRelations, includeExternal);
     }
 
     /**

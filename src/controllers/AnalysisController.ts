@@ -21,9 +21,9 @@ export class AnalysisController {
         //TODO: 这里的指令和数据格式需要和前端约定好，目前是示例占位
         switch (data.command) {
             case 'queryGlobalRelation': {
-                // 前端请求如：{ command: 'queryGlobalRelation', relation: 'extends' }
-                logger.info(`[AnalysisController] 响应全局关系查询: ${data.relation}`);
-                const result = this.runtime.queryGlobalRelation(data.relation);
+                // 前端请求如：{ command: 'queryGlobalRelation', relations: ['extends'], includeExternal: true }
+                logger.info(`[AnalysisController] 响应全局关系查询: relations=${data.relations}, includeExternal=${data.includeExternal}`);
+                const result = this.runtime.queryGlobalRelation(data.relations, data.includeExternal);
 
                 // 将查询到的 {nodes, edges} 异步推回前端绘制
                 this.provider.postMessage({
@@ -34,9 +34,9 @@ export class AnalysisController {
             }
 
             case 'queryNodeDependencies': {
-                // 前端请求如：{ command: 'queryNodeDependencies', nodeId: 'Uri#class##MyClass', allowedRelations: ['extends', 'implements'] }
-                logger.info(`[AnalysisController] 响应节点局部依赖查询: ${data.nodeId}`);
-                const result = this.runtime.queryNodeDependencies(data.nodeId, data.allowedRelations);
+                // 前端请求如：{ command: 'queryNodeDependencies', nodeId: 'Uri#class##MyClass', allowedRelations: ['extends', 'implements'], includeExternal: true }
+                logger.info(`[AnalysisController] 响应节点局部依赖查询: ${data.nodeId}, relations=${data.allowedRelations}, includeExternal=${data.includeExternal}`);
+                const result = this.runtime.queryNodeDependencies(data.nodeId, data.allowedRelations, data.includeExternal);
 
                 this.provider.postMessage({
                     command: 'renderGraphData',

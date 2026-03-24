@@ -18,6 +18,24 @@
             <span class="brand-dot"></span>
             <span class="brand">Forwarder Analysis</span>
         </div>
+        <div class="query-options relation-options" aria-label="Relation Options">
+            <span class="option-title">Relations</span>
+            <label class="option-item" for="rel-extends">
+                <input id="rel-extends" type="checkbox" checked />
+                <span>Extends</span>
+            </label>
+            <label class="option-item" for="rel-implements">
+                <input id="rel-implements" type="checkbox" checked />
+                <span>Implements</span>
+            </label>
+        </div>
+        <div class="query-options scope-options" aria-label="Workspace Scope Options">
+            <span class="option-title">Scope</span>
+            <label class="option-item" for="include-external">
+                <input id="include-external" type="checkbox" />
+                <span>Include External Files</span>
+            </label>
+        </div>
         <div class="center controls">
             <button id="btn-fit" class="nav-btn">Fit</button>
             <button id="btn-layout" class="nav-btn">Layout</button>

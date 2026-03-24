@@ -69,17 +69,21 @@
     }
 
     function requestGlobalRelation() {
+        const queryOptions = window.AnalysisUI.getQueryOptions();
         vscode.postMessage({
             command: 'queryGlobalRelation',
-            relation: 'extends'
+            relations: queryOptions.relations,
+            includeExternal: queryOptions.includeExternal
         });
     }
 
     function requestNodeDependencies(nodeId) {
+        const queryOptions = window.AnalysisUI.getQueryOptions();
         vscode.postMessage({
             command: 'queryNodeDependencies',
             nodeId,
-            allowedRelations: ['extends', 'implements', 'calls']
+            allowedRelations: queryOptions.relations,
+            includeExternal: queryOptions.includeExternal
         });
     }
 

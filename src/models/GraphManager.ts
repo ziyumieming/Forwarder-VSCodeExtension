@@ -1,4 +1,5 @@
 import { IRNode, EdgeRelation, AdjacencyMap, EdgeData, FileSymbolsPayload } from "./GraphDefinition";
+import { logger } from "../utils/logger";
 
 
 export class ProjectGraph {
@@ -99,7 +100,15 @@ export class ProjectGraph {
      * @returns 返回受此文件变动影响需要重新解析的其他文件 URI 列表
      */
     public updateFileSymbols(payload: FileSymbolsPayload): string[] {
+        logger.info(`[ProjectGraph.updateFileSymbols] 开始更新文件 ${payload.uri}: ${payload.nodes.length} 个节点, ${payload.edges.length} 条边`);
+        const edgesByRelation: { [key: string]: number } = {};
+        for (const edge of payload.edges) {
+            edgesByRelation[edge.relation] = (edgesByRelation[edge.relation] || 0) + 1;
+        }
+        logger.info(`[ProjectGraph.updateFileSymbols] 输入payload中的边统计: ${JSON.stringify(edgesByRelation)}`);
+
         if (payload.unchanged && payload.fingerprint) {
+            logger.info(`[ProjectGraph.updateFileSymbols] 结构指纹未变，仅更新节点位置信息`);
             // 指纹未变，说明结构语义未变，只需要偷偷更新已有节点的物理位置 (location) 即可
             for (const n of payload.nodes) {
                 const existing = this.nodes.get(n.id);
@@ -119,6 +128,7 @@ export class ProjectGraph {
 
         // 1. 寻找被移除节点的影响引用者，并清理它们
         const removedNodeIds = oldNodeIdsList.filter(id => !newNodeIdsSet.has(id));
+        logger.info(`[ProjectGraph.updateFileSymbols] 移除节点数: ${removedNodeIds.length}`);
         for (const oldId of removedNodeIds) {
             this._collectReferencerUris(oldId, affectedReferencerUris);
         }
@@ -154,7 +164,13 @@ export class ProjectGraph {
         }
 
         // 3. Diff 同步此文件控制的出边关系 (仅比较包含的或者从此文件内节点发出的关系)
-        this._syncFileOutEdges(newNodeIdsList, payload.edges);
+        // 关键：只对本文件定义的节点进行出边同步！占位节点不应由此文件管理其出边
+        // payload.nodes 可能包含占位节点，但它们的出边应由其真实定义所在的文件管理
+        const fileOwnedNodeIds = payload.nodes
+            .filter(n => n.location.uri === payload.uri) // 只保留当前文件定义的节点
+            .map(n => n.id);
+        logger.info(`[ProjectGraph.updateFileSymbols] 本文件拥有的节点数: ${fileOwnedNodeIds.length}，占位符节点数: ${payload.nodes.length - fileOwnedNodeIds.length}`);
+        this._syncFileOutEdges(fileOwnedNodeIds, payload.edges);
 
         // 更新保存最新的文件指纹
         if (payload.fingerprint) {
@@ -163,13 +179,23 @@ export class ProjectGraph {
 
         // 从受影响的列表中剔除自己
         affectedReferencerUris.delete(payload.uri);
+        logger.info(`[ProjectGraph.updateFileSymbols] 完成，受影响的关联文件: ${affectedReferencerUris.size} 个`);
         return Array.from(affectedReferencerUris);
     }
 
     /**
      * 将某个文件应该发出的最新边列表与当前图内旧边作 Diff，只增删有差异的部分
+     * 关键前提：nodeIds 必须是当前文件拥有的节点（即 node.location.uri === file.uri）
+     * 占位节点的出边不应由此文件管理，而由其真实定义所在的文件管理
      */
     private _syncFileOutEdges(nodeIds: string[], expectedEdges: EdgeData[]): void {
+        logger.info(`[ProjectGraph._syncFileOutEdges] 同步出边的文件拥有的节点数: ${nodeIds.length}, 期望边数: ${expectedEdges.length}`);
+        const expectedByRelation: { [key: string]: number } = {};
+        for (const e of expectedEdges) {
+            expectedByRelation[e.relation] = (expectedByRelation[e.relation] || 0) + 1;
+        }
+        logger.info(`[ProjectGraph._syncFileOutEdges] 期望边统计: ${JSON.stringify(expectedByRelation)}`);
+
         const expectedMap = new Map<string, Map<EdgeRelation, Set<string>>>();
         for (const edge of expectedEdges) {
             if (!expectedMap.has(edge.sourceId)) { expectedMap.set(edge.sourceId, new Map()); }
@@ -177,6 +203,11 @@ export class ProjectGraph {
             if (!relMap.has(edge.relation)) { relMap.set(edge.relation, new Set()); }
             relMap.get(edge.relation)!.add(edge.targetId);
         }
+
+        let addedCount = 0;
+        let removedCount = 0;
+        const addedByRelation: { [key: string]: number } = {};
+        const removedByRelation: { [key: string]: number } = {};
 
         for (const sourceId of nodeIds) {
             const expectedRels = expectedMap.get(sourceId);
@@ -189,8 +220,11 @@ export class ProjectGraph {
                 for (const [rel, targets] of Array.from(currentRels.entries())) {
                     for (const targetId of Array.from(targets)) {
                         if (!expectedRels?.get(rel)?.has(targetId)) {
+                            logger.info(`[ProjectGraph._syncFileOutEdges] 移除边: ${rel}(${sourceId}→${targetId})`);
                             currentRels.get(rel)!.delete(targetId);
                             this.inEdges.get(targetId)?.get(rel)?.delete(sourceId);
+                            removedCount++;
+                            removedByRelation[rel] = (removedByRelation[rel] || 0) + 1;
                         }
                     }
                 }
@@ -201,12 +235,19 @@ export class ProjectGraph {
                 for (const [rel, targets] of expectedRels.entries()) {
                     for (const targetId of targets) {
                         if (!currentRels?.get(rel)?.has(targetId)) {
+                            logger.info(`[ProjectGraph._syncFileOutEdges] 添加边: ${rel}(${sourceId}→${targetId})`);
                             this._addEdge(sourceId, targetId, rel);
+                            addedCount++;
+                            addedByRelation[rel] = (addedByRelation[rel] || 0) + 1;
                         }
                     }
                 }
             }
         }
+
+        logger.info(`[ProjectGraph._syncFileOutEdges] 完成，添加${addedCount}条边，移除${removedCount}条边`);
+        logger.info(`[ProjectGraph._syncFileOutEdges] 添加的边统计: ${JSON.stringify(addedByRelation)}`);
+        logger.info(`[ProjectGraph._syncFileOutEdges] 移除的边统计: ${JSON.stringify(removedByRelation)}`);
     }
 
     /**
@@ -284,20 +325,33 @@ export class ProjectGraph {
         return result;
     }
 
-    public getAllEdgesByRelation(relation: EdgeRelation): EdgeData[] {
+    public getAllEdgesByRelations(relationsList: EdgeRelation[]): EdgeData[] {
+        logger.info(`[ProjectGraph.getAllEdgesByRelations] 查询关系 ${JSON.stringify(relationsList)}`);
         const edges: EdgeData[] = [];
         for (const [sourceId, relations] of this.outEdges.entries()) {
-            const targetSet = relations.get(relation);
-            if (targetSet) {
-                for (const targetId of targetSet) {
-                    edges.push({ sourceId, targetId, relation });
+            for (const relation of relationsList) {
+                const targetSet = relations.get(relation);
+                if (targetSet) {
+                    for (const targetId of targetSet) {
+                        edges.push({ sourceId, targetId, relation });
+                    }
                 }
             }
         }
+        logger.info(`[ProjectGraph.getAllEdgesByRelations] 返回 ${edges.length} 条边`);
+
+        // 统计各关系类型的边数
+        const edgesByRelation: { [key: string]: number } = {};
+        for (const edge of edges) {
+            edgesByRelation[edge.relation] = (edgesByRelation[edge.relation] || 0) + 1;
+        }
+        logger.info(`[ProjectGraph.getAllEdgesByRelations] 各关系类型统计: ${JSON.stringify(edgesByRelation)}`);
+
         return edges;
     }
 
     public getRelatedEdges(nodeId: string, allowedRelations?: EdgeRelation[]): EdgeData[] {
+        logger.info(`[ProjectGraph.getRelatedEdges] 查询节点 ${nodeId} 的关联边，allowedRelations=${JSON.stringify(allowedRelations)}`);
         const edges: EdgeData[] = [];
 
         // 查出边
@@ -323,6 +377,13 @@ export class ProjectGraph {
                 }
             }
         }
+
+        // 统计各关系类型的边数
+        const edgesByRelation: { [key: string]: number } = {};
+        for (const edge of edges) {
+            edgesByRelation[edge.relation] = (edgesByRelation[edge.relation] || 0) + 1;
+        }
+        logger.info(`[ProjectGraph.getRelatedEdges] 返回 ${edges.length} 条边，各关系类型统计: ${JSON.stringify(edgesByRelation)}`);
 
         return edges;
     }
@@ -355,6 +416,7 @@ export class ProjectGraph {
      * 添加有向边（维护多维邻接表）
      */
     private _addEdge(sourceId: string, targetId: string, relation: EdgeRelation): void {
+        logger.info(`[ProjectGraph._addEdge] 添加边: ${relation}(${sourceId}→${targetId})`);
         // 更新出边表 (Out-Edges)
         if (!this.outEdges.has(sourceId)) {
             this.outEdges.set(sourceId, new Map());
@@ -374,5 +436,6 @@ export class ProjectGraph {
             targetRelations.set(relation, new Set());
         }
         targetRelations.get(relation)!.add(sourceId);
+        logger.info(`[ProjectGraph._addEdge] 边添加完成`);
     }
 }

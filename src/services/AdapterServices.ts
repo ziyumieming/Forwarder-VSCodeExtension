@@ -4,6 +4,7 @@ import { IRNode, NodeType, EdgeData, FileSymbolsPayload } from '../models/GraphD
 import { LSPService } from './LSPServices';
 import { InheritanceExtractor } from '../adapters/InheritanceExtractor';
 import { SymbolRule } from '../models/SymbolRule';
+import { logger } from '../utils/logger';
 
 export interface IndexedSymbol {
     id: string;
@@ -24,9 +25,11 @@ export class AdapterService {
      * 提取和转换指定文件的结构数据，生成给统一图数据结构的IR及其包含关系边
      */
     public static async extractFileSymbols(uri: vscode.Uri, oldFingerprint?: string): Promise<FileSymbolsPayload | undefined> {
+        logger.info(`[AdapterService.extractFileSymbols] 开始提取文件: ${uri.fsPath}`);
         const document = await vscode.workspace.openTextDocument(uri);
         const symbols = await LSPService.getDocumentSymbols(uri);
         if (!symbols) {
+            logger.warn(`[AdapterService.extractFileSymbols] 无法取得 LSP document symbols`);
             return undefined;
         }
 
@@ -40,8 +43,16 @@ export class AdapterService {
 
         this._extractBaseStructure(symbols, uriString, '', undefined, nodes, edges, symbolIndex);
 
+        logger.info(`[AdapterService.extractFileSymbols] 基础结构提取完毕: ${nodes.length} 个节点, ${edges.length} 条边`);
+        const baseEdgesByRelation: { [key: string]: number } = {};
+        for (const edge of edges) {
+            baseEdgesByRelation[edge.relation] = (baseEdgesByRelation[edge.relation] || 0) + 1;
+        }
+        logger.info(`[AdapterService.extractFileSymbols] 基础边统计: ${JSON.stringify(baseEdgesByRelation)}`);
+
         if (fingerprint === oldFingerprint) {
             // 结构指纹未变，无需进行高昂成本的定义跳转和关系重建。包含关系也不必重建，但返回空edge数组由Manager走增量。
+            logger.info(`[AdapterService.extractFileSymbols] 结构指纹未变，跳过继承关系重建`);
             return {
                 uri: uriString,
                 nodes,
@@ -53,19 +64,39 @@ export class AdapterService {
 
         // 2. 针对各大语言具体特性的类继承探测
         //在单文件查询时，所有在之后其他文件的扫描中会出现的节点在本次扫描是不可见的，所以它和被屏蔽的文件一样不会在本次adapter提交的内容中显示，在图数据结构中就都不会建立关系。所以有必要对边的目标节点新建占位符
+        logger.info(`[AdapterService.extractFileSymbols] 开始提取继承关系（语言: ${document.languageId}）`);
         const inheritanceResult = await InheritanceExtractor.extractEdges(document, symbolIndex, uriString, document.languageId);
+        logger.info(`[AdapterService.extractFileSymbols] 继承关系提取完毕: ${inheritanceResult.edges.length} 条边, ${inheritanceResult.placeholderNodes.length} 个占位符节点`);
+
+        const inheritanceEdgesByRelation: { [key: string]: number } = {};
+        for (const edge of inheritanceResult.edges) {
+            inheritanceEdgesByRelation[edge.relation] = (inheritanceEdgesByRelation[edge.relation] || 0) + 1;
+        }
+        logger.info(`[AdapterService.extractFileSymbols] 继承边统计: ${JSON.stringify(inheritanceEdgesByRelation)}`);
+
         edges.push(...inheritanceResult.edges);
         nodes.push(...inheritanceResult.placeholderNodes);
 
+        logger.info(`[AdapterService.extractFileSymbols] 合并后: ${nodes.length} 个节点总数, ${edges.length} 条边总数`);
+        const finalEdgesByRelation: { [key: string]: number } = {};
+        for (const edge of edges) {
+            finalEdgesByRelation[edge.relation] = (finalEdgesByRelation[edge.relation] || 0) + 1;
+        }
+        logger.info(`[AdapterService.extractFileSymbols] 最终边统计: ${JSON.stringify(finalEdgesByRelation)}`);
+
         // TODO: 3. 未来在此处调用依赖组合和函数调用等Extractor分析边关系
 
-        return {
+        const result: FileSymbolsPayload = {
             uri: uriString,
             nodes,
             edges,
             unchanged: false,
             fingerprint
         };
+
+        logger.info(`[AdapterService.extractFileSymbols] 返回 payload: nodes=${result.nodes.length}, edges=${result.edges.length}, extends边=${result.edges.filter(e => e.relation === 'extends').length}`);
+
+        return result;
     }
 
     /**

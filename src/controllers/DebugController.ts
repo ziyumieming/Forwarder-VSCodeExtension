@@ -53,11 +53,11 @@ export class DebugController {
             });
 
             // 步骤 3: 详细输出节点
-            logger.info(`\n[Step 3] 详细节点信息 (共 ${payload.nodes.length} 个):`, payload.nodes);
+            // logger.info(`\n[Step 3] 详细节点信息 (共 ${payload.nodes.length} 个):`, payload.nodes);
 
             // 步骤 4: 详细输出边关系
             logger.info(`\n[Step 4] 详细边关系 (共 ${payload.edges.length} 条):`);
-            this._logEdges(payload.edges, payload.nodes);
+            // this._logEdges(payload.edges, payload.nodes);
 
             // 步骤 5: 统计节点类型和跨文件关系
             logger.info(`\n[Step 5] 统计信息:`);
@@ -178,7 +178,7 @@ export class DebugController {
         logger.info(`  使用 ViewQueryService 进行全局和局部查询:`);
 
         // 查询 1: extends 关系
-        const extendsData = ViewQueryService.queryGlobalRelation(graph, 'extends');
+        const extendsData = ViewQueryService.queryGlobalRelation(graph, ['extends'], true);
         logger.info(`\n  ├─ Extends 关系查询结果:`);
         logger.info(`    节点数: ${extendsData.nodes.length}, 边数: ${extendsData.edges.length}`);
         if (extendsData.edges.length > 0) {
@@ -191,7 +191,7 @@ export class DebugController {
         }
 
         // 查询 2: implements 关系
-        const implementsData = ViewQueryService.queryGlobalRelation(graph, 'implements');
+        const implementsData = ViewQueryService.queryGlobalRelation(graph, ['implements'], true);
         logger.info(`\n  ├─ Implements 关系查询结果:`);
         logger.info(`    节点数: ${implementsData.nodes.length}, 边数: ${implementsData.edges.length}`);
         if (implementsData.edges.length > 0) {
@@ -204,7 +204,7 @@ export class DebugController {
         }
 
         // 查询 3: contains 关系
-        const containsData = ViewQueryService.queryGlobalRelation(graph, 'contains');
+        const containsData = ViewQueryService.queryGlobalRelation(graph, ['contains'], true);
         logger.info(`\n  ├─ Contains 关系查询结果:`);
         logger.info(`    节点数: ${containsData.nodes.length}, 边数: ${containsData.edges.length}`);
         if (containsData.edges.length > 0) {
@@ -260,14 +260,13 @@ export class DebugController {
     }
 
     /**
-     * 诊断 继承关系提取 - 针对Python等具有语言特性解析的文件进行深入检测
-     * 适应InheritanceExtractor的工作流程，追踪LSP查询结果是否正确解析
+     * 诊断 LSP 类型层级查询
+     * 提取所有类/接口/结构体，调用 getTypeHierarchySupertypes，输出父类信息及其声明源代码
      */
     public static async debugLSPTypeHierarchy(): Promise<void> {
         const editor = vscode.window.activeTextEditor;
-
         if (!editor) {
-            logger.warn('No active editor found');
+            logger.warn('No active editor');
             logger.show();
             return;
         }
@@ -276,97 +275,93 @@ export class DebugController {
         const document = editor.document;
         const languageId = document.languageId;
 
-        logger.info(`========== DIAGNOSIS: Inheritance Extraction ==========`);
-        logger.info(`File: ${uri.fsPath}`);
-        logger.info(`Language: ${languageId}`);
+        logger.info(`\n========== Type Hierarchy: ${languageId} ==========`);
+        logger.info(`File: ${uri.fsPath}\n`);
 
         try {
-            // 获取所有符号
             const symbols = await LSPService.getDocumentSymbols(uri);
             if (!symbols || symbols.length === 0) {
-                logger.warn('No symbols found');
+                logger.info('No symbols found\n');
                 logger.show();
                 return;
             }
 
-            logger.info(`\n[阶段1] 符号树扫描 - 查找所有class符号`);
-            const classSymbols = this._collectClassSymbols(symbols);
-            logger.info(`找到 ${classSymbols.length} 个class`);
+            // 收集所有 class/interface/struct
+            const isGoLanguage = languageId === 'go';
+            const targetSymbols = isGoLanguage
+                ? this._collectClassesAndInterfaces(symbols)
+                : this._collectClassSymbols(symbols);
 
-            if (classSymbols.length === 0) {
-                logger.warn('No class symbols found');
+            if (targetSymbols.length === 0) {
+                logger.info('No classes/interfaces found\n');
                 logger.show();
                 return;
             }
 
-            logger.info(`\n[阶段2] 逐一诊断每个class的LSP查询`);
-            for (let i = 0; i < classSymbols.length; i++) {
-                const sym = classSymbols[i];
-                logger.info(`\n▼ [${i + 1}/${classSymbols.length}] ${sym.name}`);
-                logger.info(`   文件范围: 第${sym.range.start.line + 1}行 - 第${sym.range.end.line + 1}行`);
-
-                // 对于Python，不需要检查extends/implements关键字
-                if (languageId === 'python') {
-                    logger.info(`\n   ├─ [Python语言] 检查class定义语法...`);
-
-                    // Python的class可以继承: class Derived(Base):
-                    const sigRange = new vscode.Range(sym.selectionRange.end, sym.range.end);
-                    let sigText = document.getText(sigRange);
-                    const colonIndex = sigText.indexOf(':');
-                    if (colonIndex !== -1) {
-                        sigText = sigText.substring(0, colonIndex);
-                    }
-                    logger.info(`   │  class定义: "class ${sym.name}${sigText}"`);
-
-                    // Python中(...)内的内容标示父类
-                    const parentMatch = sigText.match(/\(([^)]+)\)/);
-                    if (parentMatch) {
-                        logger.info(`   │  ✓ 发现父类声明: "${parentMatch[1]}"`);
-                    } else {
-                        logger.info(`   │  ℹ 无父类声明（object或其他基类取决于Python版本）`);
-                    }
-                }
-
-                // 调用 LSP getTypeHierarchySupertypes 获取类型信息
-                logger.info(`\n   ├─ 调用LSP getTypeHierarchySupertypes()...`);
-                logger.info(`   │  查询位置: (line ${sym.selectionRange.start.line}, char ${sym.selectionRange.start.character})`);
+            // 对每个类/接口获取 supertypes
+            for (const sym of targetSymbols) {
+                const symKind = vscode.SymbolKind[sym.kind];
+                logger.info(`► ${sym.name} [${symKind}]`);
 
                 const supertypes = await LSPService.getTypeHierarchySupertypes(uri, sym.selectionRange.start);
 
                 if (!supertypes || supertypes.length === 0) {
-                    logger.warn(`   │  ✗ LSP返回空数组 (0个supertypes)`);
-                    logger.info(`   │  可能原因: LSP服务未激活或不支持该语言`);
-                } else {
-                    logger.info(`   │  ✓ LSP返回 ${supertypes.length} 个supertype`);
-                    for (let j = 0; j < supertypes.length; j++) {
-                        const st = supertypes[j];
-                        logger.info(`\n   │  [${j + 1}] Supertype: "${st.name}"`);
-                        logger.info(`   │      URI: ${st.uri.fsPath}`);
-                        logger.info(`   │      位置: (line ${st.selectionRange.start.line}, char ${st.selectionRange.start.character})`);
-
-                        if (st.uri.toString() === uri.toString()) {
-                            logger.info(`   │      位置类型: 本文件内`);
-                        } else {
-                            logger.info(`   │      位置类型: 外部文件`);
-                        }
-                    }
-                    logger.info(`\n   └─ 这些supetypes将由InheritanceExtractor进一步处理`);
-                    logger.info(`      检查: _resolveSymbolInfo()是否能正确解析这些信息`);
+                    logger.info(`  (no supertypes)\n`);
+                    continue;
                 }
+
+                // 输出每个 supertype 及其源代码
+                for (const st of supertypes) {
+                    logger.info(`  └─ ${st.name}`);
+                    logger.info(`     at ${st.uri.fsPath}:${st.selectionRange.start.line + 1}`);
+
+                    try {
+                        // 读取父类声明所在的源代码
+                        const stDoc = await vscode.workspace.openTextDocument(st.uri);
+                        const line = st.selectionRange.start.line;
+                        const sourceCode = stDoc.lineAt(line).text.trim();
+                        logger.info(`     ${sourceCode}`);
+                    } catch (e) {
+                        logger.info(`     (unable to read source)`);
+                    }
+                }
+
+                logger.info('');
             }
 
-            logger.info(`\n========== DIAGNOSIS COMPLETE ==========`);
-            logger.info(`提示: 查看OUTPUT面板获取更详细的InheritanceExtractor日志`);
+            logger.info(`========== End ==========\n`);
             logger.show();
 
         } catch (error) {
-            logger.error(`Diagnosis failed: ${error}`);
+            logger.error(`Error: ${error}`);
             logger.show();
         }
     }
 
     /**
+     * 递归收集所有 class、struct 和 interface 符号
+     * 用于 Go 语言等支持 interface 和 struct 的语言的诊断
+     */
+    private static _collectClassesAndInterfaces(symbols: vscode.DocumentSymbol[]): vscode.DocumentSymbol[] {
+        const result: vscode.DocumentSymbol[] = [];
+
+        for (const sym of symbols) {
+            if (sym.kind === vscode.SymbolKind.Class ||
+                sym.kind === vscode.SymbolKind.Interface ||
+                sym.kind === vscode.SymbolKind.Struct) {
+                result.push(sym);
+            }
+            if (sym.children && sym.children.length > 0) {
+                result.push(...this._collectClassesAndInterfaces(sym.children));
+            }
+        }
+
+        return result;
+    }
+
+    /**
      * 递归收集文件中所有的class符号（不包括interface）
+     * 用于 Python 等传统的类继承语言的诊断
      */
     private static _collectClassSymbols(symbols: vscode.DocumentSymbol[]): vscode.DocumentSymbol[] {
         const result: vscode.DocumentSymbol[] = [];

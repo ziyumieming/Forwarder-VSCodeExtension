@@ -15,6 +15,7 @@ export interface IRNode {
         range: { start: LineCol; end: LineCol };
     };
     placeHolder?: boolean;    // 是否为占位节点（外部文件临时添加）
+    isLibrary?: boolean;      // 是否来源于标准库或第三方库
 
     // 节点类型特定的补充信息
     namespace?: string;     // 如类/接口的命名空间
