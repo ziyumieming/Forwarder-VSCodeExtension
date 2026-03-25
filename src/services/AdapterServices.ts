@@ -158,12 +158,30 @@ export class AdapterService {
 
             const id = SymbolRule.generateNodeId(uriString, nodeType, namespace, sym.name);
 
+            // 获取类或接口的字段信息
+            let fields: { name: string; type?: string; signature?: string }[] | undefined;
+            if (nodeType === 'class' || nodeType === 'interface') {
+                fields = [];
+                if (sym.children) {
+                    for (const child of sym.children) {
+                        if (
+                            child.kind === vscode.SymbolKind.Field ||
+                            child.kind === vscode.SymbolKind.Property ||
+                            child.kind === vscode.SymbolKind.Variable
+                        ) {
+                            fields.push({ name: child.name, type: child.detail });
+                        }
+                    }
+                }
+            }
+
             // 构建节点
             nodes.push({
                 id,
                 name: sym.name,
                 type: nodeType,
                 namespace: namespace || undefined,
+                fields: fields && fields.length > 0 ? fields : undefined,
                 location: {
                     uri: uriString,
                     range: {

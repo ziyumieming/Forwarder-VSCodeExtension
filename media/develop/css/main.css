@@ -7,6 +7,10 @@
     --text-sub: #99b2c9;
     --accent: #f3b23a;
     --accent-hover: #ffc869;
+    --class-card-title: #f2f8fd;
+    --class-card-section: #bdd5e8;
+    --class-card-member: #e2eef8;
+    --class-card-member-hover: #ffe3ad;
 }
 
 * {

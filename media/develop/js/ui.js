@@ -18,6 +18,14 @@
         };
     }
 
+    function readClassCardOptions() {
+        return {
+            showFields: true,
+            showMethods: true,
+            collapsedSections: []
+        };
+    }
+
     const AnalysisUI = {
         register(handlers) {
             const fitBtn = document.getElementById('btn-fit');
@@ -33,6 +41,10 @@
 
         getQueryOptions() {
             return readQueryOptions();
+        },
+
+        getClassCardOptions() {
+            return readClassCardOptions();
         }
     };
 

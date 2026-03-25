@@ -15,9 +15,33 @@
                         'font-size': 11,
                         'text-valign': 'center',
                         'text-halign': 'center',
+                        'text-margin-x': 0,
+                        'text-margin-y': 0,
                         width: 'label',
                         height: 'label',
                         padding: '12px'
+                    }
+                },
+                {
+                    selector: 'node.center-class-card',
+                    style: {
+                        shape: 'round-rectangle',
+                        'background-color': '#193147',
+                        'border-width': 2,
+                        'border-color': '#b9d8ef',
+                        width: 'data(cardWidth)',
+                        height: 'data(cardHeight)',
+                        padding: 0,
+                        'text-wrap': 'wrap',
+                        'text-max-width': 300,
+                        'font-size': 10,
+                        'line-height': 1.18,
+                        'text-halign': 'center',
+                        'text-valign': 'center',
+                        'text-justification': 'left',
+                        'text-margin-x': 0,
+                        'text-margin-y': 0,
+                        color: '#e6f2fb'
                     }
                 },
                 {
@@ -48,6 +72,14 @@
                         'background-color': '#f3b23a',
                         'border-color': '#ffe3ad',
                         color: '#241808'
+                    }
+                },
+                {
+                    selector: 'node.center-class-card.focus',
+                    style: {
+                        'background-color': '#224869',
+                        'border-color': '#ffd794',
+                        color: '#f4fbff'
                     }
                 }
             ];
