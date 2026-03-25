@@ -377,4 +377,101 @@ export class DebugController {
 
         return result;
     }
+
+    /**
+     * 诊断查询图中的特定边关系
+     * 提取当前文件的符号，构建图，查询指定关系（如 contains），并输出结果
+     */
+    public static async debugQueryRelations(): Promise<void> {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            logger.warn('No active editor');
+            logger.show();
+            return;
+        }
+
+        const uri = editor.document.uri;
+        logger.info(`\n========== Graph Relations Query ==========`);
+        logger.info(`File: ${uri.fsPath}\n`);
+
+        try {
+            // 提取当前文件的符号
+            logger.info(`[1] Extracting symbols...`);
+            const payload = await AdapterService.extractFileSymbols(uri);
+            if (!payload) {
+                logger.warn('Failed to extract symbols');
+                logger.show();
+                return;
+            }
+
+            logger.info(`    Nodes: ${payload.nodes.length}, Edges: ${payload.edges.length}\n`);
+
+            // 构建图
+            logger.info(`[2] Building graph...`);
+            const graph = new ProjectGraph();
+            graph.updateFileSymbols(payload);
+            logger.info(`    Graph updated\n`);
+
+            // 查询 contains 关系
+            logger.info(`[3] Querying 'contains' relations:`);
+            const containsData = ViewQueryService.queryGlobalRelation(graph, ['contains'], true);
+            logger.info(`    Nodes: ${containsData.nodes.length}, Edges: ${containsData.edges.length}\n`);
+
+            if (containsData.edges.length === 0) {
+                logger.info(`    (no 'contains' relations found)\n`);
+            } else {
+                const nodeMap = new Map(containsData.nodes.map(n => [n.id, n]));
+                for (const edge of containsData.edges) {
+                    const source = nodeMap.get(edge.sourceId);
+                    const target = nodeMap.get(edge.targetId);
+                    const sourceLabel = source ? `${source.name} [${source.type}]` : '?';
+                    const targetLabel = target ? `${target.name} [${target.type}]` : '?';
+                    logger.info(`    ${sourceLabel} contains ${targetLabel}`);
+                }
+            }
+
+            // 查询 extends 关系
+            logger.info(`\n[4] Querying 'extends' relations:`);
+            const extendsData = ViewQueryService.queryGlobalRelation(graph, ['extends'], true);
+            logger.info(`    Nodes: ${extendsData.nodes.length}, Edges: ${extendsData.edges.length}\n`);
+
+            if (extendsData.edges.length === 0) {
+                logger.info(`    (no 'extends' relations found)\n`);
+            } else {
+                const nodeMap = new Map(extendsData.nodes.map(n => [n.id, n]));
+                for (const edge of extendsData.edges) {
+                    const source = nodeMap.get(edge.sourceId);
+                    const target = nodeMap.get(edge.targetId);
+                    const sourceLabel = source ? `${source.name} [${source.type}]` : '?';
+                    const targetLabel = target ? `${target.name} [${target.type}]` : '?';
+                    logger.info(`    ${sourceLabel} extends ${targetLabel}`);
+                }
+            }
+
+            // 查询 implements 关系
+            logger.info(`\n[5] Querying 'implements' relations:`);
+            const implementsData = ViewQueryService.queryGlobalRelation(graph, ['implements'], true);
+            logger.info(`    Nodes: ${implementsData.nodes.length}, Edges: ${implementsData.edges.length}\n`);
+
+            if (implementsData.edges.length === 0) {
+                logger.info(`    (no 'implements' relations found)\n`);
+            } else {
+                const nodeMap = new Map(implementsData.nodes.map(n => [n.id, n]));
+                for (const edge of implementsData.edges) {
+                    const source = nodeMap.get(edge.sourceId);
+                    const target = nodeMap.get(edge.targetId);
+                    const sourceLabel = source ? `${source.name} [${source.type}]` : '?';
+                    const targetLabel = target ? `${target.name} [${target.type}]` : '?';
+                    logger.info(`    ${sourceLabel} implements ${targetLabel}`);
+                }
+            }
+
+            logger.info(`========== End ==========\n`);
+            logger.show();
+
+        } catch (error) {
+            logger.error(`Error: ${error}`);
+            logger.show();
+        }
+    }
 }

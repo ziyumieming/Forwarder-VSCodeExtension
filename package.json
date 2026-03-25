@@ -24,11 +24,15 @@
       },
       {
         "command": "forwarder.debug.analyze",
-        "title": "Debug: 检验流程通行性"
+        "title": "Debug: 诊断流程通行性"
       },
       {
         "command": "forwarder.debug.lspTypeHierarchy",
-        "title": "Debug: 诊断LSP类型层次查询 - 检查extends/implements"
+        "title": "Debug: 诊断LSP类型层次查询"
+      },
+      {
+        "command": "forwarder.debug.queryRelations",
+        "title": "Debug: 诊断图解析能力"
       }
     ],
     "viewsContainers": {
