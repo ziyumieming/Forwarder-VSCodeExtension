@@ -35,6 +35,7 @@ export class AnalysisViewProvider implements vscode.WebviewViewProvider {
         const uiScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'ui.js'));
         const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'css', 'main.css'));
         const cytoscapeUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'public', 'cytoscape.min.js'));
+        const cytoscapeHtmlNodeUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'public', 'cytoscape-html-node.js'));
         const htmlPath = vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'html', 'view.html');
         const nonce = this._getNonce();
 
@@ -49,6 +50,7 @@ export class AnalysisViewProvider implements vscode.WebviewViewProvider {
                 .replace(/{{eventScriptUri}}/g, eventScriptUri.toString())
                 .replace(/{{uiScriptUri}}/g, uiScriptUri.toString())
                 .replace(/{{cytoscapeUri}}/g, cytoscapeUri.toString())
+                .replace(/{{cytoscapeHtmlNodeUri}}/g, cytoscapeHtmlNodeUri.toString())
                 .replace(/{{nonce}}/g, nonce);
 
             return html;

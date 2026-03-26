@@ -45,6 +45,20 @@
                     }
                 },
                 {
+                    selector: 'node.center-class-card[useHtmlCard = 1]',
+                    style: {
+                        label: 'data(baseLabel)',
+                        'text-opacity': 0,
+                        color: 'transparent'
+                    }
+                },
+                {
+                    selector: 'node[isCenterClassCard = 0]',
+                    style: {
+                        shape: 'ellipse'
+                    }
+                },
+                {
                     selector: 'edge',
                     style: {
                         width: 1.6,

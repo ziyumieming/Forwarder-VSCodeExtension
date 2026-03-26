@@ -90,7 +90,7 @@ export class ViewQueryService {
                 methods
             };
         }
-        logger.info(`[ViewQueryService.queryNodeDependencies] 中心节点详情: ${centerDetails ? JSON.stringify(centerDetails) : '无'}`);
+        // logger.info(`[ViewQueryService.queryNodeDependencies] 中心节点详情: ${centerDetails ? JSON.stringify(centerDetails) : '无'}`);
 
         // 如果不包含外部节点，则过滤非 library 节点，同时剔除关联被过滤节点的边
         if (!includeExternal) {
