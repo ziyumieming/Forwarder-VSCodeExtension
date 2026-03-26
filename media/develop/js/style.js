@@ -49,7 +49,9 @@
                     style: {
                         label: 'data(baseLabel)',
                         'text-opacity': 0,
-                        color: 'transparent'
+                        color: 'transparent',
+                        'background-opacity': 0,
+                        'border-opacity': 0
                     }
                 },
                 {

@@ -15,6 +15,14 @@
     let querySequence = 0;
     const pendingQueryMap = new Map();
     let nodeHtmlLabelRenderCount = 0;
+    let centerCardEnabled = false;
+    let lastQueryRequest = null;
+    const collapsedCardSections = new Set();
+    let suppressNodeTapNodeId = null;
+    let suppressNodeTapUntil = 0;
+    const CENTER_LOCK_ZOOM = 1;
+    let cardPointerState = null;
+    let ignoreCardClickUntil = 0;
 
     const DEBUG_LEVELS = {
         off: 0,
@@ -98,6 +106,7 @@
             lastCenterNodeId,
             pendingCenterDetailsNodeId,
             lastRequestMode,
+            centerCardEnabled,
             htmlNodePluginReady,
             htmlRendererInitialized,
             htmlCardGeneration,
@@ -325,7 +334,25 @@
         return `<button class="analysis-class-card-member" data-node-id="${escapeAttr(nodeId)}" data-member-kind="${escapeAttr(memberKind)}" data-member-id="${escapeAttr(memberId)}" data-member-label="${escapeAttr(memberLabel)}">${escapeHtml(memberLabel || '(unknown)')}</button>`;
     }
 
+    function isCardSectionCollapsed(sectionName) {
+        return collapsedCardSections.has(sectionName);
+    }
+
+    function buildCardSection(nodeId, sectionName, title, rowsHtml) {
+        const collapsed = isCardSectionCollapsed(sectionName);
+        const collapsedClass = collapsed ? ' is-collapsed' : '';
+        const expandedText = collapsed ? 'false' : 'true';
+        const caret = collapsed ? '&#9656;' : '&#9662;';
+
+        return `<div class="analysis-class-card-section${collapsedClass}" data-card-section="${escapeAttr(sectionName)}"><button type="button" class="analysis-class-card-section-title analysis-class-card-section-toggle" data-node-id="${escapeAttr(nodeId)}" data-card-section="${escapeAttr(sectionName)}" aria-expanded="${expandedText}"><span class="analysis-class-card-caret" aria-hidden="true">${caret}</span><span class="analysis-class-card-title-text">${escapeHtml(title)}</span></button><div class="analysis-class-card-section-body">${rowsHtml}</div></div>`;
+    }
+
     function buildHtmlClassCard(nodeId, classCard) {
+        const options = getClassCardOptions();
+        (options.collapsedSections || []).forEach((section) => {
+            collapsedCardSections.add(String(section));
+        });
+
         const title = escapeHtml(classCard.title || nodeId);
         const fields = classCard.fields || [];
         const methods = classCard.methods || [];
@@ -338,7 +365,10 @@
             ? methods.map((method, index) => buildClassMemberRow(nodeId, 'method', method, index)).join('')
             : '<div class="analysis-class-card-empty">No methods</div>';
 
-        return `<div id="htmlLabel:${escapeAttr(nodeId)}" class="analysis-class-card" data-node-id="${escapeAttr(nodeId)}"><div class="analysis-class-card-header">${title}</div><div class="analysis-class-card-section"><div class="analysis-class-card-section-title">Fields</div><div class="analysis-class-card-section-body">${fieldRows}</div></div><div class="analysis-class-card-section"><div class="analysis-class-card-section-title">Methods</div><div class="analysis-class-card-section-body">${methodRows}</div></div></div>`;
+        const fieldSection = buildCardSection(nodeId, 'fields', 'Fields', fieldRows);
+        const methodSection = buildCardSection(nodeId, 'methods', 'Methods', methodRows);
+
+        return `<div id="htmlLabel:${escapeAttr(nodeId)}" class="analysis-class-card" data-node-id="${escapeAttr(nodeId)}"><div class="analysis-class-card-header"><button type="button" class="analysis-class-card-header-action" data-card-action="refresh-center" data-node-id="${escapeAttr(nodeId)}">${title}</button></div>${fieldSection}${methodSection}</div>`;
     }
 
     function dispatchCardCommand(command, payload) {
@@ -373,6 +403,66 @@
         }
     }
 
+    function rememberLastQuery(command, payload, source) {
+        lastQueryRequest = {
+            command,
+            payload: { ...payload },
+            source,
+            ts: Date.now()
+        };
+
+        log('query', 'verbose', 'remember last query', {
+            command,
+            source,
+            payload
+        });
+    }
+
+    function replayLastQuery(source) {
+        if (!lastQueryRequest) {
+            log('query', 'info', 'replay last query fallback to global', { source });
+            requestGlobalRelation(source);
+            return;
+        }
+
+        log('query', 'info', 'replay last query', {
+            source,
+            lastCommand: lastQueryRequest.command,
+            lastPayload: lastQueryRequest.payload,
+            lastSource: lastQueryRequest.source
+        });
+
+        if (lastQueryRequest.command === 'queryNodeDependencies') {
+            const replayNodeId = String(
+                lastQueryRequest.payload?.nodeId || currentCenterNodeId || pendingCenterDetailsNodeId || ''
+            );
+
+            if (!replayNodeId) {
+                requestGlobalRelation(`${source}:node-replay-fallback`);
+                return;
+            }
+
+            centerCardEnabled = false;
+            applyCenterCardPresentation();
+            resetFocus();
+
+            requestNodeDependencies(replayNodeId, source, {
+                payloadOverride: {
+                    ...lastQueryRequest.payload,
+                    nodeId: replayNodeId
+                },
+                enableCenterCard: false,
+                setAsCenterNode: true
+            });
+            return;
+        }
+
+        requestGlobalRelation(source, {
+            payloadOverride: { ...lastQueryRequest.payload }
+        });
+        resetFocus();
+    }
+
     function buildHtmlDataByNodeId() {
         const htmlDataByNodeId = new Map();
 
@@ -397,6 +487,38 @@
         cy.nodes().forEach((node) => {
             const nodeId = String(node.id());
             node.data('htmlCardMarkup', htmlDataByNodeId.get(nodeId) || '');
+        });
+    }
+
+    function shouldIgnoreCardClick() {
+        return Date.now() <= ignoreCardClickUntil;
+    }
+
+    function lockCenterNodeViewport(reason) {
+        if (!currentCenterNodeId || lastRequestMode !== 'node') {
+            return;
+        }
+
+        const centerNode = cy.getElementById(currentCenterNodeId);
+        if (!centerNode || centerNode.length === 0) {
+            return;
+        }
+
+        const centerPos = centerNode.position();
+        const zoom = CENTER_LOCK_ZOOM;
+        const pan = {
+            x: cy.width() / 2 - centerPos.x * zoom,
+            y: cy.height() / 2 - centerPos.y * zoom
+        };
+
+        cy.zoom(zoom);
+        cy.pan(pan);
+
+        log('state', 'verbose', 'lock center viewport', {
+            reason,
+            currentCenterNodeId,
+            zoom,
+            pan
         });
     }
 
@@ -560,6 +682,73 @@
 
         debug('bind class card delegated events');
 
+        document.addEventListener('pointerdown', (event) => {
+            const cardRoot = event.target.closest('.analysis-class-card');
+            if (!cardRoot) {
+                return;
+            }
+
+            cardPointerState = {
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startY: event.clientY,
+                moved: false
+            };
+        });
+
+        document.addEventListener('pointermove', (event) => {
+            if (!cardPointerState || cardPointerState.pointerId !== event.pointerId) {
+                return;
+            }
+
+            const dx = Math.abs(event.clientX - cardPointerState.startX);
+            const dy = Math.abs(event.clientY - cardPointerState.startY);
+            if (dx > 6 || dy > 6) {
+                cardPointerState.moved = true;
+            }
+        });
+
+        document.addEventListener('pointerup', (event) => {
+            if (!cardPointerState || cardPointerState.pointerId !== event.pointerId) {
+                return;
+            }
+
+            if (cardPointerState.moved) {
+                ignoreCardClickUntil = Date.now() + 220;
+            }
+
+            cardPointerState = null;
+        });
+
+        document.addEventListener('pointercancel', () => {
+            cardPointerState = null;
+        });
+
+        document.addEventListener('wheel', (event) => {
+            const sectionBody = event.target.closest('.analysis-class-card-section-body');
+            if (!sectionBody) {
+                return;
+            }
+
+            const maxScrollTop = sectionBody.scrollHeight - sectionBody.clientHeight;
+            if (maxScrollTop <= 0) {
+                return;
+            }
+
+            const deltaY = event.deltaY || 0;
+            const atTop = sectionBody.scrollTop <= 0;
+            const atBottom = sectionBody.scrollTop >= maxScrollTop - 1;
+            const canConsume = (deltaY < 0 && !atTop) || (deltaY > 0 && !atBottom);
+
+            if (!canConsume) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            sectionBody.scrollTop += deltaY;
+        }, { passive: false });
+
         document.addEventListener('mouseover', (event) => {
             const item = event.target.closest('.analysis-class-card-member');
             if (!item) {
@@ -605,8 +794,76 @@
         });
 
         document.addEventListener('click', (event) => {
+            const headerAction = event.target.closest('.analysis-class-card-header-action');
+            if (headerAction) {
+                event.preventDefault();
+                event.stopPropagation();
+
+                if (shouldIgnoreCardClick()) {
+                    log('state', 'verbose', 'ignore header action click after drag', {});
+                    return;
+                }
+
+                const nodeId = headerAction.dataset.nodeId;
+                if (!nodeId) {
+                    return;
+                }
+
+                suppressNodeTapNodeId = String(nodeId);
+                suppressNodeTapUntil = Date.now() + 300;
+
+                requestNodeDependencies(nodeId, 'card-header-refresh', {
+                    enableCenterCard: true,
+                    setAsCenterNode: true
+                });
+                return;
+            }
+
+            const sectionToggle = event.target.closest('.analysis-class-card-section-toggle');
+            if (sectionToggle) {
+                event.preventDefault();
+                event.stopPropagation();
+
+                if (shouldIgnoreCardClick()) {
+                    log('state', 'verbose', 'ignore section toggle click after drag', {});
+                    return;
+                }
+
+                const sectionName = sectionToggle.dataset.cardSection;
+                if (!sectionName) {
+                    return;
+                }
+
+                const sectionRoot = sectionToggle.closest('.analysis-class-card-section');
+                if (!sectionRoot) {
+                    return;
+                }
+
+                const willCollapse = !sectionRoot.classList.contains('is-collapsed');
+                sectionRoot.classList.toggle('is-collapsed', willCollapse);
+                sectionToggle.setAttribute('aria-expanded', willCollapse ? 'false' : 'true');
+
+                const caret = sectionToggle.querySelector('.analysis-class-card-caret');
+                if (caret) {
+                    caret.innerHTML = willCollapse ? '&#9656;' : '&#9662;';
+                }
+
+                if (willCollapse) {
+                    collapsedCardSections.add(sectionName);
+                } else {
+                    collapsedCardSections.delete(sectionName);
+                }
+
+                return;
+            }
+
             const item = event.target.closest('.analysis-class-card-member');
             if (!item) {
+                return;
+            }
+
+            if (shouldIgnoreCardClick()) {
+                log('state', 'verbose', 'ignore member click after drag', {});
                 return;
             }
 
@@ -723,9 +980,10 @@
     function applyCenterCardPresentation() {
         let centerCount = 0;
         let htmlCardCount = 0;
+        const shouldUseCenterCard = !!currentCenterNodeId && centerCardEnabled;
 
         cy.nodes().forEach((node) => {
-            const isCenterCard = !!currentCenterNodeId && node.id() === currentCenterNodeId;
+            const isCenterCard = shouldUseCenterCard && node.id() === currentCenterNodeId;
             const useHtmlCard = isCenterCard && htmlNodePluginReady;
 
             if (isCenterCard) {
@@ -756,6 +1014,7 @@
 
         log('state', 'info', 'apply center presentation', {
             currentCenterNodeId,
+            centerCardEnabled,
             centerCount,
             htmlCardCount,
             htmlNodePluginReady
@@ -902,47 +1161,98 @@
 
         logStateSnapshot('renderGraphData:post-apply', 'info');
 
-        cy.layout(window.AnalysisStyle.getDefaultLayout()).run();
+        const layoutOptions = {
+            ...window.AnalysisStyle.getDefaultLayout()
+        };
+
+        if (lastRequestMode === 'node') {
+            layoutOptions.fit = false;
+        }
+
+        cy.one('layoutstop', () => {
+            lockCenterNodeViewport('layoutstop');
+        });
+
+        cy.layout(layoutOptions).run();
+
+        if (lastRequestMode === 'node') {
+            lockCenterNodeViewport('post-run');
+        }
     }
 
-    function requestGlobalRelation(source = 'toolbar-button') {
-        const queryOptions = window.AnalysisUI.getQueryOptions();
-        lastRequestMode = 'global';
-        log('query', 'info', 'request global relation', {
-            source,
-            queryOptions
-        });
-        sendQuery('queryGlobalRelation', {
+    function requestGlobalRelation(source = 'toolbar-button', options = {}) {
+        const queryOptions = options.queryOptionsOverride || window.AnalysisUI.getQueryOptions();
+        const payload = options.payloadOverride || {
             relations: queryOptions.relations,
             includeExternal: queryOptions.includeExternal
+        };
+
+        lastRequestMode = 'global';
+        centerCardEnabled = false;
+        rememberLastQuery('queryGlobalRelation', payload, source);
+
+        log('query', 'info', 'request global relation', {
+            source,
+            queryOptions,
+            payload
         });
+        sendQuery('queryGlobalRelation', payload);
 
         // 发送查询后再做本地状态复位，避免复位异常阻断通信。
         clearCenterCardState('global-query', { refreshCards: false });
     }
 
-    function requestNodeDependencies(nodeId, source = 'node-tap') {
-        const queryOptions = window.AnalysisUI.getQueryOptions();
+    function requestNodeDependencies(nodeId, source = 'node-tap', options = {}) {
+        const queryOptions = options.queryOptionsOverride || window.AnalysisUI.getQueryOptions();
+        const normalizedNodeId = String(nodeId);
+        const payload = options.payloadOverride || {
+            nodeId: normalizedNodeId,
+            allowedRelations: queryOptions.relations,
+            includeExternal: queryOptions.includeExternal
+        };
+
         lastRequestMode = 'node';
-        pendingCenterDetailsNodeId = String(nodeId);
+        pendingCenterDetailsNodeId = String(payload.nodeId || normalizedNodeId);
+        centerCardEnabled = options.enableCenterCard === true;
+
+        if (options.setAsCenterNode !== false) {
+            setCenterNode(payload.nodeId || normalizedNodeId, `request-node:${source}`);
+        }
+
+        rememberLastQuery('queryNodeDependencies', payload, source);
 
         log('query', 'info', 'request node dependencies', {
             source,
-            nodeId,
+            nodeId: payload.nodeId || normalizedNodeId,
             queryOptions,
-            pendingCenterDetailsNodeId
+            pendingCenterDetailsNodeId,
+            centerCardEnabled,
+            payload
         });
 
-        sendQuery('queryNodeDependencies', {
-            nodeId,
-            allowedRelations: queryOptions.relations,
-            includeExternal: queryOptions.includeExternal
-        });
+        sendQuery('queryNodeDependencies', payload);
     }
 
     window.AnalysisGraphEvents.register(cy, {
         onNodeTap: (node) => {
             const tappedNodeId = String(node.id());
+
+            if (suppressNodeTapNodeId === tappedNodeId && Date.now() <= suppressNodeTapUntil) {
+                log('state', 'verbose', 'suppress node tap after card action', {
+                    nodeId: tappedNodeId,
+                    suppressNodeTapUntil
+                });
+                return;
+            }
+
+            if (currentCenterNodeId && tappedNodeId === String(currentCenterNodeId) && centerCardEnabled) {
+                log('state', 'info', 'ignore repeated center node tap', {
+                    nodeId: tappedNodeId,
+                    reason: 'center-refresh-only-via-header-action'
+                });
+                return;
+            }
+
             const previousCenter = currentCenterNodeId;
             const isRepeatCenterTap = !!previousCenter && previousCenter === tappedNodeId;
 
@@ -953,6 +1263,7 @@
                 transitionPath: `${previousCenter || 'null'} -> ${tappedNodeId}`
             });
 
+            centerCardEnabled = true;
             setCenterNode(tappedNodeId, 'tap-node');
             applyCenterCardPresentation();
 
@@ -961,18 +1272,21 @@
             neighborhood.removeClass('faded');
             node.addClass('focus');
 
-            requestNodeDependencies(tappedNodeId, 'node-tap');
+            requestNodeDependencies(tappedNodeId, 'node-tap', {
+                enableCenterCard: true,
+                setAsCenterNode: false
+            });
         },
         onBackgroundContextTap: () => {
-            log('state', 'info', 'background context tap -> requery global graph', {});
-            requestGlobalRelation('background-reset');
+            log('state', 'info', 'background context tap -> replay last query', {});
+            replayLastQuery('background-reset');
         }
     });
 
     window.AnalysisUI.register({
         onFit: () => cy.fit(undefined, 70),
         onLayout: () => cy.layout(window.AnalysisStyle.getAltLayout()).run(),
-        onReset: () => requestGlobalRelation('manual-reset'),
+        onReset: () => replayLastQuery('manual-reset'),
         onQueryGlobalRelation: () => requestGlobalRelation('toolbar-button')
     });
 
