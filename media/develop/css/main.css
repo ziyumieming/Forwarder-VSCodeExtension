@@ -263,9 +263,7 @@ body {
     display: grid;
     gap: 5px;
     justify-content: start;
-    max-height: calc(
-        var(--analysis-card-row-height) * var(--analysis-card-row-max) + var(--analysis-card-section-vpad)
-    );
+    max-height: calc(var(--analysis-card-row-height) * var(--analysis-card-row-max) + var(--analysis-card-section-vpad));
 }
 
 .analysis-class-card-member {
