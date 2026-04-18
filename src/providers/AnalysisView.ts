@@ -33,6 +33,19 @@ export class AnalysisViewProvider implements vscode.WebviewViewProvider {
         const styleScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'style.js'));
         const eventScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'event.js'));
         const uiScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'ui.js'));
+        const moduleLoggerScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'logger.js'));
+        const modulePluginManagerScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'plugin-manager.js'));
+        const moduleCardMarkupScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'card-markup.js'));
+        const moduleCenterStateScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'center-state.js'));
+        const moduleQueryServiceScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'query-service.js'));
+        const moduleGraphIncrementalScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'graph-incremental.js'));
+        const moduleGraphPipelineScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'graph-pipeline.js'));
+        const moduleLayoutManagerScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'layout-manager.js'));
+        const moduleCardRenderScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'card-render.js'));
+        const moduleCardEventsScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'card-events.js'));
+        const moduleViewportAnimationScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'viewport-animation.js'));
+        const moduleGraphFocusScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'graph-focus.js'));
+        const moduleCenterPresentationScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'center-presentation.js'));
         const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'css', 'main.css'));
         const cytoscapeUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'public', 'cytoscape.min.js'));
         const cytoscapeHtmlNodeUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'public', 'cytoscape-html-node.js'));
@@ -49,6 +62,19 @@ export class AnalysisViewProvider implements vscode.WebviewViewProvider {
                 .replace(/{{styleScriptUri}}/g, styleScriptUri.toString())
                 .replace(/{{eventScriptUri}}/g, eventScriptUri.toString())
                 .replace(/{{uiScriptUri}}/g, uiScriptUri.toString())
+                .replace(/{{moduleLoggerScriptUri}}/g, moduleLoggerScriptUri.toString())
+                .replace(/{{modulePluginManagerScriptUri}}/g, modulePluginManagerScriptUri.toString())
+                .replace(/{{moduleCardMarkupScriptUri}}/g, moduleCardMarkupScriptUri.toString())
+                .replace(/{{moduleCenterStateScriptUri}}/g, moduleCenterStateScriptUri.toString())
+                .replace(/{{moduleQueryServiceScriptUri}}/g, moduleQueryServiceScriptUri.toString())
+                .replace(/{{moduleGraphIncrementalScriptUri}}/g, moduleGraphIncrementalScriptUri.toString())
+                .replace(/{{moduleGraphPipelineScriptUri}}/g, moduleGraphPipelineScriptUri.toString())
+                .replace(/{{moduleLayoutManagerScriptUri}}/g, moduleLayoutManagerScriptUri.toString())
+                .replace(/{{moduleCardRenderScriptUri}}/g, moduleCardRenderScriptUri.toString())
+                .replace(/{{moduleCardEventsScriptUri}}/g, moduleCardEventsScriptUri.toString())
+                .replace(/{{moduleViewportAnimationScriptUri}}/g, moduleViewportAnimationScriptUri.toString())
+                .replace(/{{moduleGraphFocusScriptUri}}/g, moduleGraphFocusScriptUri.toString())
+                .replace(/{{moduleCenterPresentationScriptUri}}/g, moduleCenterPresentationScriptUri.toString())
                 .replace(/{{cytoscapeUri}}/g, cytoscapeUri.toString())
                 .replace(/{{cytoscapeHtmlNodeUri}}/g, cytoscapeHtmlNodeUri.toString())
                 .replace(/{{nonce}}/g, nonce);
