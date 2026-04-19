@@ -21,26 +21,33 @@ export class AnalysisController {
         //TODO: 这里的指令和数据格式需要和前端约定好，目前是示例占位
         switch (data.command) {
             case 'queryGlobalRelation': {
-                // 前端请求如：{ command: 'queryGlobalRelation', relations: ['extends'], includeExternal: true }
-                logger.info(`[AnalysisController] 响应全局关系查询: relations=${data.relations}, includeExternal=${data.includeExternal}`);
-                const result = this.runtime.queryGlobalRelation(data.relations, data.includeExternal);
+                // 前端请求如：{ command: 'queryGlobalRelation', relations: ['extends'], includeExternal: true, __queryId: '...', __queryMode: 'global', __querySignature: '...' }
+                logger.info(`[AnalysisController] 响应全局关系查询: relations=${data.relations}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                const result = await this.runtime.queryGlobalRelation(data.relations, data.includeExternal);
 
-                // 将查询到的 {nodes, edges} 异步推回前端绘制
+                // 将查询到的 {nodes, edges} 异步推回前端绘制，并携带查询标识字段供前端去重
                 this.provider.postMessage({
                     command: 'renderGraphData',
-                    data: result
+                    data: result,
+                    __queryId: data.__queryId,
+                    __queryMode: data.__queryMode,
+                    __querySignature: data.__querySignature
                 });
                 break;
             }
 
             case 'queryNodeDependencies': {
-                // 前端请求如：{ command: 'queryNodeDependencies', nodeId: 'Uri#class##MyClass', allowedRelations: ['extends', 'implements'], includeExternal: true }
-                logger.info(`[AnalysisController] 响应节点局部依赖查询: ${data.nodeId}, relations=${data.allowedRelations}, includeExternal=${data.includeExternal}`);
-                const result = this.runtime.queryNodeDependencies(data.nodeId, data.allowedRelations, data.includeExternal);
+                // 前端请求如：{ command: 'queryNodeDependencies', nodeId: 'Uri#class##MyClass', allowedRelations: ['extends', 'implements'], includeExternal: true, __queryId: '...', __queryMode: 'node', __querySignature: '...' }
+                logger.info(`[AnalysisController] 响应节点局部依赖查询: ${data.nodeId}, relations=${data.allowedRelations}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                const result = await this.runtime.queryNodeDependencies(data.nodeId, data.allowedRelations, data.includeExternal);
 
+                // 将查询到的 {nodes, edges} 异步推回前端绘制，并携带查询标识字段供前端去重
                 this.provider.postMessage({
                     command: 'renderGraphData',
-                    data: result
+                    data: result,
+                    __queryId: data.__queryId,
+                    __queryMode: data.__queryMode,
+                    __querySignature: data.__querySignature
                 });
                 break;
             }

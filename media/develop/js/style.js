@@ -97,6 +97,15 @@
                         'border-color': '#ffd794',
                         color: '#f4fbff'
                     }
+                },
+                {
+                    selector: '.transition-hidden',
+                    style: {
+                        opacity: 0,
+                        'text-opacity': 0,
+                        'overlay-opacity': 0,
+                        events: 'no'
+                    }
                 }
             ];
         },

@@ -6,6 +6,30 @@
         return;
     }
 
+    function resolveAnimationDurationScale(options) {
+        var safeOptions = options || {};
+        var fromOption = Number(safeOptions.animationDurationScale);
+        if (Number.isFinite(fromOption) && fromOption > 0) {
+            return fromOption;
+        }
+
+        var fromGlobal = Number(globalScope.__analysisAnimationDurationScale);
+        if (Number.isFinite(fromGlobal) && fromGlobal > 0) {
+            return fromGlobal;
+        }
+
+        return 1;
+    }
+
+    function scaleDuration(duration, options) {
+        var ms = Number(duration);
+        if (!Number.isFinite(ms) || ms < 0) {
+            return 0;
+        }
+
+        return Math.max(0, Math.round(ms * resolveAnimationDurationScale(options)));
+    }
+
     function getNodeModeLayoutOptions(options) {
         var safeOptions = options || {};
         var getDefaultLayout = typeof safeOptions.getDefaultLayout === 'function'
@@ -66,6 +90,11 @@
         var layoutAnimationToken = safeOptions.layoutAnimationToken;
         var log = typeof safeOptions.log === 'function' ? safeOptions.log : function () { };
         var debugWarn = typeof safeOptions.debugWarn === 'function' ? safeOptions.debugWarn : function () { };
+        var includeAllNonCenterNodes = safeOptions.includeAllNonCenterNodes === true;
+        var onBeforeEnterAnimation = typeof safeOptions.onBeforeEnterAnimation === 'function'
+            ? safeOptions.onBeforeEnterAnimation
+            : null;
+        var onAfterLayout = typeof safeOptions.onAfterLayout === 'function' ? safeOptions.onAfterLayout : null;
         var animateCenterNodeViewport = typeof safeOptions.animateCenterNodeViewport === 'function'
             ? safeOptions.animateCenterNodeViewport
             : function () {
@@ -81,16 +110,24 @@
             return false;
         }
 
-        var enteringNodeIds = Array.from(new Set([].concat(
-            (incrementalResult && incrementalResult.addedNodeIds) || [],
-            (incrementalResult && incrementalResult.replacedNodeIds) || []
-        )))
-            .map(function (nodeId) {
-                return String(nodeId);
-            })
-            .filter(function (nodeId) {
-                return nodeId !== String(currentCenterNodeId);
-            });
+        var enteringNodeIds = includeAllNonCenterNodes
+            ? cy.nodes().toArray()
+                .map(function (node) {
+                    return String(node.id());
+                })
+                .filter(function (nodeId) {
+                    return nodeId !== String(currentCenterNodeId);
+                })
+            : Array.from(new Set([].concat(
+                (incrementalResult && incrementalResult.addedNodeIds) || [],
+                (incrementalResult && incrementalResult.replacedNodeIds) || []
+            )))
+                .map(function (nodeId) {
+                    return String(nodeId);
+                })
+                .filter(function (nodeId) {
+                    return nodeId !== String(currentCenterNodeId);
+                });
 
         if (enteringNodeIds.length === 0) {
             return false;
@@ -132,14 +169,24 @@
                 });
             });
 
+            if (onBeforeEnterAnimation) {
+                onBeforeEnterAnimation({
+                    animationToken: animationToken,
+                    currentCenterNodeId: currentCenterNodeId,
+                    enteringNodeCount: targets.length
+                });
+            }
+
             targets.forEach(function (entry) {
                 entry.node.position(centerPosition);
                 entry.node.style('opacity', 0);
             });
 
-            var staggerDelay = 80;
-            var moveDuration = 340;
-            var totalDelay = (targets.length > 0 ? (targets.length - 1) * staggerDelay : 0) + moveDuration + 30;
+            var staggerDelay = scaleDuration(80, safeOptions);
+            var moveDuration = scaleDuration(340, safeOptions);
+            var totalDelay = (targets.length > 0 ? (targets.length - 1) * staggerDelay : 0)
+                + moveDuration
+                + scaleDuration(30, safeOptions);
 
             targets.forEach(function (entry, index) {
                 setTimeout(function () {
@@ -174,10 +221,22 @@
                 }
 
                 centerNode.unlock();
-                animateCenterNodeViewport('node-stagger-enter-complete', {
-                    duration: 360,
-                    animationToken: animationToken
-                });
+
+                var handled = false;
+                if (onAfterLayout) {
+                    handled = onAfterLayout({
+                        animationToken: animationToken,
+                        currentCenterNodeId: currentCenterNodeId,
+                        enteringNodeCount: targets.length
+                    }) === true;
+                }
+
+                if (!handled) {
+                    animateCenterNodeViewport('node-stagger-enter-complete', {
+                        duration: scaleDuration(360, safeOptions),
+                        animationToken: animationToken
+                    });
+                }
             }, totalDelay);
 
             log('renderer', 'info', 'node stagger enter animation applied', {
@@ -239,9 +298,9 @@
                 return leftDistance - rightDistance;
             });
 
-            var staggerDelay = 16;
-            var nodeDuration = 220;
-            var edgeDuration = 200;
+            var staggerDelay = scaleDuration(16, safeOptions);
+            var nodeDuration = scaleDuration(220, safeOptions);
+            var edgeDuration = scaleDuration(200, safeOptions);
             var maxStaggerSteps = 56;
 
             orderedNodes.forEach(function (node, index) {
@@ -292,7 +351,7 @@
                         debugWarn('remove edge opacity style failed after global reveal animation', { error: error });
                     }
                 });
-            }, Math.max(80, Math.floor(lastDelay * 0.5)));
+            }, Math.max(scaleDuration(80, safeOptions), Math.floor(lastDelay * 0.5)));
 
             log('renderer', 'info', 'global smooth reveal animation applied', {
                 nodeCount: orderedNodes.length,

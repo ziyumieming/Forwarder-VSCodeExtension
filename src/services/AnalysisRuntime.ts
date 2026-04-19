@@ -35,8 +35,15 @@ export class AnalysisRuntime {
     private activeTask?: AnalysisTask;
     private pendingDeletions: Map<string, NodeJS.Timeout> = new Map();
 
+    // 后端就绪状态阻塞原语
+    private readyPromise: Promise<void>;
+    private resolveReady!: () => void;
+
     private constructor() {
         this.projectGraph = new ProjectGraph();
+        this.readyPromise = new Promise((resolve) => {
+            this.resolveReady = resolve;
+        });
     }
 
     public static getInstance(): AnalysisRuntime {
@@ -193,75 +200,81 @@ export class AnalysisRuntime {
             throw new Error('[AnalysisRuntime] 尚未初始化 storagePath，无法运行增量扫描。');
         }
 
-        logger.info('[AnalysisRuntime] 开始启动增量同步...');
+        try {
+            logger.info('[AnalysisRuntime] 开始启动增量同步...');
 
-        // 0. 校验持久化架构版本和单文件作用域变化，判断是否需要重置存储
-        const didWipe = await this.syncService.checkAndInitManifest();
-        if (didWipe) {
-            logger.info('[AnalysisRuntime] 侦测到缓存已被擦除，将进行全量冷启动。');
-            // 清理本身的索引并让图为空
-            this.projectGraph.clearAll();
-        }
-
-        // 1. 加载本地持久化快照与积压队列
-        if (!didWipe) {
-            await this.syncService.loadSnapshot(this.projectGraph);
-            await this.syncService.loadFileIndex();
-        }
-
-        // 2. 将快照中的索引与当前工作区真实文件对比
-        const changes = await this.syncService.scanWorkspaceChanges();
-        logger.info(`[AnalysisRuntime] 扫描完毕。发现重命名文件: ${changes.renamed?.length || 0}个, 需分析文件: ${changes.addedOrModified.length}个, 被删除文件: ${changes.deleted.length}个.`);
-
-        if (changes.renamed && changes.renamed.length > 0) {
-            for (const rename of changes.renamed) {
-                logger.info(`[AnalysisRuntime] 处理文件重命名 (增量同步): ${rename.oldUri.fsPath} -> ${rename.newUri.fsPath}`);
-                this.projectGraph.renameFile(rename.oldUri.toString(), rename.newUri.toString());
-                await this.syncService.removeFileFromIndex(rename.oldUri);
+            // 0. 校验持久化架构版本和单文件作用域变化，判断是否需要重置存储
+            const didWipe = await this.syncService.checkAndInitManifest();
+            if (didWipe) {
+                logger.info('[AnalysisRuntime] 侦测到缓存已被擦除，将进行全量冷启动。');
+                // 清理本身的索引并让图为空
+                this.projectGraph.clearAll();
             }
-        }
 
-        // 3. 加载历史遗留挂起任务与未固化任务
-        const pendingTasks = this.syncService.loadPendingTasksSync();
-        if (pendingTasks.length > 0) {
-            logger.info(`[AnalysisRuntime] 发现上次退出时未处理完及未固化的任务，共 ${pendingTasks.length} 个，正在恢复...`);
-            for (const pt of pendingTasks) {
-                let targetUriStr = pt.uriStr;
-                // 检查是否在离线期间被并且成功识别为了重命名
-                if (changes.renamed) {
-                    const renameRecord = changes.renamed.find(r => r.oldUri.toString() === pt.uriStr);
-                    if (renameRecord) {
-                        targetUriStr = renameRecord.newUri.toString();
-                        logger.info(`[AnalysisRuntime] 追回已重命名的挂起任务: ${pt.uriStr} -> ${targetUriStr}`);
+            // 1. 加载本地持久化快照与积压队列
+            if (!didWipe) {
+                await this.syncService.loadSnapshot(this.projectGraph);
+                await this.syncService.loadFileIndex();
+            }
+
+            // 2. 将快照中的索引与当前工作区真实文件对比
+            const changes = await this.syncService.scanWorkspaceChanges();
+            logger.info(`[AnalysisRuntime] 扫描完毕。发现重命名文件: ${changes.renamed?.length || 0}个, 需分析文件: ${changes.addedOrModified.length}个, 被删除文件: ${changes.deleted.length}个.`);
+
+            if (changes.renamed && changes.renamed.length > 0) {
+                for (const rename of changes.renamed) {
+                    logger.info(`[AnalysisRuntime] 处理文件重命名 (增量同步): ${rename.oldUri.fsPath} -> ${rename.newUri.fsPath}`);
+                    this.projectGraph.renameFile(rename.oldUri.toString(), rename.newUri.toString());
+                    await this.syncService.removeFileFromIndex(rename.oldUri);
+                }
+            }
+
+            // 3. 加载历史遗留挂起任务与未固化任务
+            const pendingTasks = this.syncService.loadPendingTasksSync();
+            if (pendingTasks.length > 0) {
+                logger.info(`[AnalysisRuntime] 发现上次退出时未处理完及未固化的任务，共 ${pendingTasks.length} 个，正在恢复...`);
+                for (const pt of pendingTasks) {
+                    let targetUriStr = pt.uriStr;
+                    // 检查是否在离线期间被并且成功识别为了重命名
+                    if (changes.renamed) {
+                        const renameRecord = changes.renamed.find(r => r.oldUri.toString() === pt.uriStr);
+                        if (renameRecord) {
+                            targetUriStr = renameRecord.newUri.toString();
+                            logger.info(`[AnalysisRuntime] 追回已重命名的挂起任务: ${pt.uriStr} -> ${targetUriStr}`);
+                        }
+                    }
+
+                    try {
+                        const uri = vscode.Uri.parse(targetUriStr);
+                        // 仅当文件存在于磁盘时，才进行重检查恢复
+                        await vscode.workspace.fs.stat(uri);
+                        this.enqueueTask(uri, `[自动恢复未固化任务] ${pt.reason}`, pt.cascade);
+                    } catch (err: any) {
+                        logger.info(`[AnalysisRuntime] 挂起任务文件已丢失或不可读，跳过恢复: ${targetUriStr}`);
                     }
                 }
-
-                try {
-                    const uri = vscode.Uri.parse(targetUriStr);
-                    // 仅当文件存在于磁盘时，才进行重检查恢复
-                    await vscode.workspace.fs.stat(uri);
-                    this.enqueueTask(uri, `[自动恢复未固化任务] ${pt.reason}`, pt.cascade);
-                } catch (err: any) {
-                    logger.info(`[AnalysisRuntime] 挂起任务文件已丢失或不可读，跳过恢复: ${targetUriStr}`);
-                }
             }
-        }
 
-        // 4. 处理按需更新文件 (入队)
-        for (const uri of changes.addedOrModified) {
-            this.enqueueTask(uri, '增量扫描发现文件修改/新增', true);
-        }
+            // 4. 处理按需更新文件 (入队)
+            for (const uri of changes.addedOrModified) {
+                this.enqueueTask(uri, '增量扫描发现文件修改/新增', true);
+            }
 
-        // 5. 处理被删除的文件 （直接执行，脱机删除不需要防抖）
-        for (const uri of changes.deleted) {
-            logger.info(`[AnalysisRuntime] 增量发现文件已删除: ${uri.fsPath}`);
-            await this.executeDeletion(uri);
-        }
+            // 5. 处理被删除的文件 （直接执行，脱机删除不需要防抖）
+            for (const uri of changes.deleted) {
+                logger.info(`[AnalysisRuntime] 增量发现文件已删除: ${uri.fsPath}`);
+                await this.executeDeletion(uri);
+            }
 
-        // 若队列中没有任务，直接保存快照；否则通过队列后续保存
-        if (this.taskQueue.length === 0 && !this.isProcessing) {
-            await this.syncService.saveSnapshot(this.projectGraph);
-            logger.info('[AnalysisRuntime] 增量同步完成！无新增更新项。');
+            // 若队列中没有任务，直接保存快照；否则通过队列后续保存
+            if (this.taskQueue.length === 0 && !this.isProcessing) {
+                await this.syncService.saveSnapshot(this.projectGraph);
+                logger.info('[AnalysisRuntime] 增量同步完成！无新增更新项。');
+            }
+        } finally {
+            // 解析完成后，解除启动拦截（就算出错也不能彻底卡死）
+            this.resolveReady();
+            logger.info('[AnalysisRuntime] 初始启动数据载入完成，释放后端查询阻塞。');
         }
     }
 
@@ -396,12 +409,14 @@ export class AnalysisRuntime {
     }
 
     // 编排调用: 查询全局视图
-    public queryGlobalRelation(relations: EdgeRelation[], includeExternal?: boolean): GraphViewData {
+    public async queryGlobalRelation(relations: EdgeRelation[], includeExternal?: boolean): Promise<GraphViewData> {
+        await this.readyPromise;
         return ViewQueryService.queryGlobalRelation(this.projectGraph, relations, includeExternal);
     }
 
     // 编排调用: 查询节点依赖
-    public queryNodeDependencies(nodeId: string, allowedRelations?: EdgeRelation[], includeExternal?: boolean): GraphViewData {
+    public async queryNodeDependencies(nodeId: string, allowedRelations?: EdgeRelation[], includeExternal?: boolean): Promise<GraphViewData> {
+        await this.readyPromise;
         return ViewQueryService.queryNodeDependencies(this.projectGraph, nodeId, allowedRelations, includeExternal);
     }
 

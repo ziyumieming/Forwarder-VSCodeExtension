@@ -11,8 +11,11 @@
     const collapsedCardSections = new Set();
     let suppressNodeTapNodeId = null;
     let suppressNodeTapUntil = 0;
+    let pendingGlobalToNodeTransition = null;
     const CENTER_LOCK_ZOOM = 1;
     const CENTER_OVERVIEW_ZOOM = 0.5;
+    const QUERY_DEBOUNCE_WINDOW_MS = 80;
+    const QUERY_DUPLICATE_WINDOW_MS = 220;
     let latestGraphSnapshot = {
         nodes: new Map(),
         edges: new Map()
@@ -272,6 +275,7 @@
 
         return viewportAnimationModule.animateCenterNodeViewport({
             ...options,
+            animationDurationScale: getAnimationDurationScale(),
             reason,
             cy,
             log,
@@ -282,6 +286,141 @@
             centerOverviewZoom: CENTER_OVERVIEW_ZOOM,
             layoutAnimationToken
         });
+    };
+
+    const panCenterNodeToViewport = (reason, options = {}) => {
+        if (!viewportAnimationModule || typeof viewportAnimationModule.panCenterNodeToViewport !== 'function') {
+            return false;
+        }
+
+        return viewportAnimationModule.panCenterNodeToViewport({
+            ...options,
+            animationDurationScale: getAnimationDurationScale(),
+            reason,
+            cy,
+            log,
+            currentCenterNodeId
+        });
+    };
+
+    const animateCenterNodeZoomOnly = (reason, options = {}) => {
+        if (!viewportAnimationModule || typeof viewportAnimationModule.animateCenterNodeZoomOnly !== 'function') {
+            return false;
+        }
+
+        return viewportAnimationModule.animateCenterNodeZoomOnly({
+            ...options,
+            animationDurationScale: getAnimationDurationScale(),
+            reason,
+            cy,
+            log,
+            currentCenterNodeId,
+            lastRequestMode,
+            centerCardEnabled,
+            centerLockZoom: CENTER_LOCK_ZOOM,
+            centerOverviewZoom: CENTER_OVERVIEW_ZOOM,
+            layoutAnimationToken
+        });
+    };
+
+    const getAnimationDurationScale = () => {
+        const fromGlobal = Number(window.__analysisAnimationDurationScale);
+        if (Number.isFinite(fromGlobal) && fromGlobal > 0) {
+            return fromGlobal;
+        }
+
+        return 1;
+    };
+
+    const scaleAnimationDuration = (duration) => {
+        const scale = getAnimationDurationScale();
+        const ms = Number(duration);
+        if (!Number.isFinite(ms) || ms < 0) {
+            return 0;
+        }
+
+        return Math.max(0, Math.round(ms * scale));
+    };
+
+    const getQueryDebounceWindowMs = () => {
+        const fromGlobal = Number(window.__analysisQueryDebounceWindowMs);
+        if (Number.isFinite(fromGlobal) && fromGlobal >= 0) {
+            return fromGlobal;
+        }
+
+        return QUERY_DEBOUNCE_WINDOW_MS;
+    };
+
+    const getQueryDuplicateWindowMs = () => {
+        const fromGlobal = Number(window.__analysisQueryDuplicateWindowMs);
+        if (Number.isFinite(fromGlobal) && fromGlobal >= 0) {
+            return fromGlobal;
+        }
+
+        return QUERY_DUPLICATE_WINDOW_MS;
+    };
+
+    const computeGlobalToNodeZoomTarget = () => {
+        const nodeCount = Math.max(1, cy.nodes().length);
+        const rawZoom = 1.05 - 0.12 * Math.log2(nodeCount + 1);
+        return Math.min(0.95, Math.max(0.42, rawZoom));
+    };
+
+    const clearGlobalToNodeTransitionMask = (reason) => {
+        const hiddenElements = cy.elements('.transition-hidden');
+        if (!hiddenElements || hiddenElements.length === 0) {
+            return;
+        }
+
+        hiddenElements.removeClass('transition-hidden');
+        log('state', 'verbose', 'clear global-to-node transition mask', {
+            reason,
+            hiddenCount: hiddenElements.length
+        });
+    };
+
+    const applyGlobalToNodeTransitionMask = (centerNodeId) => {
+        const normalizedCenterId = centerNodeId ? String(centerNodeId) : null;
+        if (!normalizedCenterId) {
+            return;
+        }
+
+        const centerNode = cy.getElementById(normalizedCenterId);
+        if (!centerNode || centerNode.length === 0 || !centerNode.isNode()) {
+            return;
+        }
+
+        cy.elements().addClass('transition-hidden');
+        centerNode.removeClass('transition-hidden');
+
+        log('state', 'verbose', 'apply global-to-node transition mask', {
+            centerNodeId: normalizedCenterId,
+            hiddenCount: cy.elements('.transition-hidden').length
+        });
+    };
+
+    const finalizeGlobalToNodeViewport = (reason, options = {}) => {
+        const targetZoom = computeGlobalToNodeZoomTarget();
+        clearGlobalToNodeTransitionMask(reason + ':finalize');
+        pendingGlobalToNodeTransition = null;
+
+        if (animateCenterNodeZoomOnly(reason, {
+            ...options,
+            targetZoom,
+            duration: options.duration !== null ? options.duration : 320
+        })) {
+            return true;
+        }
+
+        if (animateCenterNodeViewport(reason, {
+            ...options,
+            targetZoom,
+            duration: options.duration !== null ? options.duration : 320
+        })) {
+            return true;
+        }
+
+        return lockCenterNodeViewport(reason, { targetZoom });
     };
 
     const setCenterNode = (nodeId, reason) => {
@@ -460,6 +599,10 @@
         }
 
         const { elements, snapshot } = normalized;
+        const isGlobalToNodeTransition = !!pendingGlobalToNodeTransition
+            && lastRequestMode === 'node'
+            && !!currentCenterNodeId
+            && pendingGlobalToNodeTransition.centerNodeId === String(currentCenterNodeId);
 
         log('state', 'info', 'render graph data', {
             elementCount: elements.length,
@@ -539,6 +682,10 @@
             });
         }
 
+        if (!isGlobalToNodeTransition) {
+            clearGlobalToNodeTransitionMask('renderGraphData:normal');
+        }
+
         const layoutOptions = {
             ...window.AnalysisStyle.getDefaultLayout()
         };
@@ -553,6 +700,7 @@
                 ? layoutManagerModule.getNodeModeLayoutOptions({
                     fit: false,
                     animate: layoutOptions.animate,
+                    animationDurationScale: getAnimationDurationScale(),
                     currentCenterNodeId,
                     getDefaultLayout: () => window.AnalysisStyle.getDefaultLayout()
                 })
@@ -564,7 +712,21 @@
             Object.assign(layoutOptions, nodeModeLayoutOptions);
         }
 
+        if (layoutOptions.animate) {
+            const baseDuration = Number(layoutOptions.animationDuration);
+            const normalizedDuration = Number.isFinite(baseDuration) && baseDuration > 0 ? baseDuration : 500;
+            layoutOptions.animationDuration = scaleAnimationDuration(normalizedDuration);
+        }
+
         if (!shouldRunLayout) {
+            if (isGlobalToNodeTransition) {
+                finalizeGlobalToNodeViewport('skip-layout:no-structural-change:global-to-node', {
+                    animationToken,
+                    duration: 260
+                });
+                return;
+            }
+
             if (!animateCenterNodeViewport('skip-layout:no-structural-change', {
                 duration: 260,
                 animationToken
@@ -600,18 +762,61 @@
                     incrementalResult,
                     currentCenterNodeId,
                     lastRequestMode,
+                    animationDurationScale: getAnimationDurationScale(),
                     getDefaultLayout: () => window.AnalysisStyle.getDefaultLayout(),
                     log,
                     debugWarn,
-                    animateCenterNodeViewport: (reason, options = {}) => animateCenterNodeViewport(reason, options)
+                    includeAllNonCenterNodes: isGlobalToNodeTransition,
+                    animateCenterNodeViewport: (reason, options = {}) => animateCenterNodeViewport(reason, options),
+                    onBeforeEnterAnimation: isGlobalToNodeTransition
+                        ? ({ animationToken: startedAnimationToken }) => {
+                            if (startedAnimationToken !== layoutAnimationToken) {
+                                return;
+                            }
+
+                            clearGlobalToNodeTransitionMask('node-stagger-enter-start:global-to-node');
+                        }
+                        : null,
+                    onAfterLayout: isGlobalToNodeTransition
+                        ? ({ animationToken: completedAnimationToken }) => {
+                            finalizeGlobalToNodeViewport('node-stagger-enter-complete:global-to-node', {
+                                animationToken: completedAnimationToken,
+                                duration: 360
+                            });
+                            return true;
+                        }
+                        : null
                 });
             if (usedStagger) {
                 return;
             }
         }
 
+        let lockedCenterNodeForTransitionLayout = null;
+        if (isGlobalToNodeTransition && currentCenterNodeId) {
+            const centerNodeForTransitionLayout = cy.getElementById(String(currentCenterNodeId));
+            if (centerNodeForTransitionLayout
+                && centerNodeForTransitionLayout.length > 0
+                && centerNodeForTransitionLayout.isNode()) {
+                centerNodeForTransitionLayout.lock();
+                lockedCenterNodeForTransitionLayout = centerNodeForTransitionLayout;
+            }
+        }
+
         cy.one('layoutstop', () => {
+            if (lockedCenterNodeForTransitionLayout) {
+                lockedCenterNodeForTransitionLayout.unlock();
+            }
+
             if (animationToken !== layoutAnimationToken) {
+                return;
+            }
+
+            if (isGlobalToNodeTransition) {
+                finalizeGlobalToNodeViewport('layoutstop:global-to-node', {
+                    animationToken,
+                    duration: 320
+                });
                 return;
             }
 
@@ -632,6 +837,9 @@
             relations: queryOptions.relations,
             includeExternal: queryOptions.includeExternal
         };
+
+        pendingGlobalToNodeTransition = null;
+        clearGlobalToNodeTransitionMask('requestGlobalRelation');
 
         lastRequestMode = 'global';
         centerCardEnabled = false;
@@ -654,6 +862,8 @@
                 meta: {
                     requestMode: 'global'
                 },
+                debounceWindowMs: getQueryDebounceWindowMs(),
+                duplicateWindowMs: getQueryDuplicateWindowMs(),
                 log,
                 postMessage: (message) => {
                     vscode.postMessage(message);
@@ -734,6 +944,8 @@
                     centerStateVersion,
                     centerNodeId: String(payload.nodeId || normalizedNodeId)
                 },
+                debounceWindowMs: getQueryDebounceWindowMs(),
+                duplicateWindowMs: getQueryDuplicateWindowMs(),
                 log,
                 postMessage: (message) => {
                     vscode.postMessage(message);
@@ -764,6 +976,7 @@
 
             const previousCenter = currentCenterNodeId;
             const isRepeatCenterTap = !!previousCenter && previousCenter === tappedNodeId;
+            const isGlobalToNodeTransition = lastRequestMode === 'global';
 
             log('state', 'info', 'node tap', {
                 nodeId: tappedNodeId,
@@ -791,6 +1004,18 @@
                         centerPresentationModule.clearNodeBypassSize({ node: nodeRef, log, debugWarn });
                     }
                 });
+            }
+
+            if (isGlobalToNodeTransition) {
+                pendingGlobalToNodeTransition = {
+                    centerNodeId: tappedNodeId,
+                    ts: Date.now()
+                };
+                applyGlobalToNodeTransitionMask(tappedNodeId);
+                panCenterNodeToViewport('global-to-node:tap-anchor');
+            } else {
+                pendingGlobalToNodeTransition = null;
+                clearGlobalToNodeTransitionMask('node-tap:non-global-transition');
             }
 
             const neighborhood = node.closedNeighborhood();
@@ -919,10 +1144,21 @@
             ? queryServiceModule.consumePendingResponse(data)
             : {
                 responseQueryId: data?.data?.__queryId || data?.__queryId || null,
-                responseMeta: null
+                responseMeta: null,
+                responseRequestMode: null,
+                latestQueryIdForMode: null,
+                droppedByLatestWin: false,
+                dropReason: null
             };
 
-        const { responseQueryId, responseMeta } = response;
+        const {
+            responseQueryId,
+            responseMeta,
+            responseRequestMode,
+            latestQueryIdForMode,
+            droppedByLatestWin,
+            dropReason
+        } = response;
 
         log('query', 'info', 'receive backend message', {
             command: data.command,
@@ -930,10 +1166,24 @@
             hasCenterDetails: !!data?.data?.centerDetails,
             responseQueryId,
             matchedRequestCommand: responseMeta?.command || null,
-            requestMode: responseMeta?.meta?.requestMode || null
+            requestMode: responseRequestMode || responseMeta?.meta?.requestMode || null,
+            droppedByLatestWin,
+            dropReason,
+            latestQueryIdForMode
         });
 
         if (data.command === 'renderGraphData') {
+            if (droppedByLatestWin) {
+                log('query', 'info', 'drop stale response by latest-win', {
+                    responseQueryId,
+                    responseRequestMode,
+                    latestQueryIdForMode,
+                    dropReason,
+                    matchedRequestCommand: responseMeta?.command || null
+                });
+                return;
+            }
+
             if (responseMeta?.command === 'queryNodeDependencies') {
                 const responseVersion = Number(responseMeta?.meta?.centerStateVersion);
                 const currentVersion = Number(
