@@ -20,7 +20,7 @@ export interface IRNode {
     // 节点类型特定的补充信息
     namespace?: string;     // 如类/接口的命名空间
     signature?: string;     // 如函数/方法的签名（参数列表等）
-    fields?: { name: string; type?: string; signature?: string }[]; // 类的字段列表
+    fields?: { name: string; type?: string; signature?: string; range?: { start: LineCol; end: LineCol } }[]; // 类的字段列表
 
     sourceCode?: string;    // 该节点的源码片段 (按需填充供 LLM 使用)
     semanticData?: {        // 语义模块填充位
@@ -29,7 +29,7 @@ export interface IRNode {
     };
 }
 
-export type EdgeRelation = 'contains' | 'extends' | 'implements' | 'calls' | 'references';
+export type EdgeRelation = 'contains' | 'extends' | 'implements' | 'calls' | 'references' | 'composes' | 'uses';
 
 
 export interface EdgeData {
@@ -48,7 +48,7 @@ export interface GraphViewData {
         nodeId: string;
         name: string;
         type: NodeType;
-        fields?: { name: string; type?: string; signature?: string }[];
+        fields?: { name: string; type?: string; signature?: string; range?: { start: LineCol; end: LineCol } }[];
         methods: { id: string; name: string }[];
     };
 }

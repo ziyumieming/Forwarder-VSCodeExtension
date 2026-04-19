@@ -50,6 +50,21 @@ export class LSPService {
         }
     }
 
+    // 获取特定位置的定义信息（用于组合关系扫描）
+    public static async getTypeDefinition(uri: vscode.Uri, position: vscode.Position): Promise<vscode.Location[] | vscode.LocationLink[] | undefined> {
+        try {
+            const definitions = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
+                'vscode.executeTypeDefinitionProvider',
+                uri,
+                position
+            );
+            return definitions;
+        } catch (err) {
+            logger.info(`[LSPService] 获取类型定义失败: ${uri.toString()}`);
+            return undefined;
+        }
+    }
+
     // 根据当前光标位置自动寻找并获取函数信息
     public static async getActiveFunction(): Promise<FunctionInfo | undefined> {
         const editor = vscode.window.activeTextEditor;

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { IRNode, NodeType, EdgeData, FileSymbolsPayload } from '../models/GraphDefinition';
 import { LSPService } from './LSPServices';
-import { InheritanceExtractor } from '../adapters/InheritanceExtractor';
+import { InheritanceExtractor, CompositionExtractor } from '../adapters/Extractor';
 import { SymbolRule } from '../models/SymbolRule';
 import { logger } from '../utils/logger';
 
@@ -82,9 +82,15 @@ export class AdapterService {
         for (const edge of edges) {
             finalEdgesByRelation[edge.relation] = (finalEdgesByRelation[edge.relation] || 0) + 1;
         }
-        logger.info(`[AdapterService.extractFileSymbols] 最终边统计: ${JSON.stringify(finalEdgesByRelation)}`);
+        logger.info(`[AdapterService.extractFileSymbols] 最终合并边统计: ${JSON.stringify(finalEdgesByRelation)}`);
 
-        // TODO: 3. 未来在此处调用依赖组合和函数调用等Extractor分析边关系
+        // 3. 组合/引用 关系抽取（成员变量提取等）
+        logger.info(`[AdapterService.extractFileSymbols] 开始提取组合关系（字段引用）`);
+        const compositionResult = await CompositionExtractor.analyze(document, symbolIndex, uriString);
+        logger.info(`[AdapterService.extractFileSymbols] 组合关系提取完毕: ${compositionResult.edges.length} 条边, ${compositionResult.placeholderNodes.length} 个占位符节点`);
+
+        edges.push(...compositionResult.edges);
+        nodes.push(...compositionResult.placeholderNodes);
 
         const result: FileSymbolsPayload = {
             uri: uriString,
@@ -159,7 +165,7 @@ export class AdapterService {
             const id = SymbolRule.generateNodeId(uriString, nodeType, namespace, sym.name);
 
             // 获取类或接口的字段信息
-            let fields: { name: string; type?: string; signature?: string }[] | undefined;
+            let fields: { name: string; type?: string; signature?: string; range?: { start: { line: number, character: number }, end: { line: number, character: number } } }[] | undefined;
             if (nodeType === 'class' || nodeType === 'interface') {
                 fields = [];
                 if (sym.children) {
@@ -169,7 +175,14 @@ export class AdapterService {
                             child.kind === vscode.SymbolKind.Property ||
                             child.kind === vscode.SymbolKind.Variable
                         ) {
-                            fields.push({ name: child.name, type: child.detail });
+                            fields.push({
+                                name: child.name,
+                                type: child.detail,
+                                range: {
+                                    start: { line: child.selectionRange.start.line, character: child.selectionRange.start.character },
+                                    end: { line: child.selectionRange.end.line, character: child.selectionRange.end.character }
+                                }
+                            });
                         }
                     }
                 }

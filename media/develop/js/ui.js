@@ -2,6 +2,7 @@
     function readQueryOptions() {
         const extendsChecked = document.getElementById('rel-extends')?.checked ?? false;
         const implementsChecked = document.getElementById('rel-implements')?.checked ?? false;
+        const composesChecked = document.getElementById('rel-composes')?.checked ?? false;
         const includeExternal = document.getElementById('include-external')?.checked ?? false;
 
         const relations = [];
@@ -10,6 +11,9 @@
         }
         if (implementsChecked) {
             relations.push('implements');
+        }
+        if (composesChecked) {
+            relations.push('composes');
         }
 
         return {

@@ -4,6 +4,7 @@ import { LSPService } from '../../services/LSPServices';
 import { DocumentSymbolIndex } from '../../services/AdapterServices';
 import { SymbolRule } from '../../models/SymbolRule';
 import { logger } from '../../utils/logger';
+import { ExtractorUtils } from '../Extractor';
 
 export class GoInheritanceExtractor {
     public static async analyze(
@@ -33,7 +34,7 @@ export class GoInheritanceExtractor {
                     const targetUri = superTypeItem.uri;
                     const targetRange = superTypeItem.selectionRange;
 
-                    const targetInfo = await this._resolveSymbolInfo(targetUri, targetRange.start, cache);
+                    const targetInfo = await ExtractorUtils.resolveSymbolInfo(targetUri, targetRange.start, cache);
                     logger.info(`[GoInheritanceExtractor.analyze] 解析 supertype (${targetUri.fsPath}:${targetRange.start.line}): targetInfo = ${targetInfo ? JSON.stringify(targetInfo) : 'undefined'}`);
                     if (targetInfo) {
                         // 确定 relation: Go 的 Struct (class) -> Interface 是 implements

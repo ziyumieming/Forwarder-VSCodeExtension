@@ -219,7 +219,23 @@ export class DebugController {
             }
         }
 
-        // 查询 4: 节点邻接网络 - 找出第一个class或interface节点作为示例
+        // 查询 4: composes 关系（组合/成员字段引用）
+        const composesData = ViewQueryService.queryGlobalRelation(graph, ['composes'], true);
+        logger.info(`\n  ├─ Composes 关系查询结果:`);
+        logger.info(`    节点数: ${composesData.nodes.length}, 边数: ${composesData.edges.length}`);
+        if (composesData.edges.length > 0) {
+            const nodeMap = new Map(composesData.nodes.map(n => [n.id, n]));
+            composesData.edges.slice(0, 5).forEach(edge => {
+                const source = nodeMap.get(edge.sourceId);
+                const target = nodeMap.get(edge.targetId);
+                logger.info(`      ${source?.name || '?'} composes ${target?.name || '?'}`);
+            });
+            if (composesData.edges.length > 5) {
+                logger.info(`      ... 以及 ${composesData.edges.length - 5} 条边（省略）`);
+            }
+        }
+
+        // 查询 5: 节点邻接网络 - 找出第一个class或interface节点作为示例
         const targetNode = nodes.find(n => n.type === 'class' || n.type === 'interface');
         if (targetNode) {
             logger.info(`\n  └─ 节点邻接网络查询示例 (节点: ${targetNode.name}):`);
@@ -463,6 +479,24 @@ export class DebugController {
                     const sourceLabel = source ? `${source.name} [${source.type}]` : '?';
                     const targetLabel = target ? `${target.name} [${target.type}]` : '?';
                     logger.info(`    ${sourceLabel} implements ${targetLabel}`);
+                }
+            }
+
+            // 查询 composes 关系（组合/成员字段引用）
+            logger.info(`\n[6] Querying 'composes' relations:`);
+            const composesData = ViewQueryService.queryGlobalRelation(graph, ['composes'], true);
+            logger.info(`    Nodes: ${composesData.nodes.length}, Edges: ${composesData.edges.length}\n`);
+
+            if (composesData.edges.length === 0) {
+                logger.info(`    (no 'composes' relations found)\n`);
+            } else {
+                const nodeMap = new Map(composesData.nodes.map(n => [n.id, n]));
+                for (const edge of composesData.edges) {
+                    const source = nodeMap.get(edge.sourceId);
+                    const target = nodeMap.get(edge.targetId);
+                    const sourceLabel = source ? `${source.name} [${source.type}]` : '?';
+                    const targetLabel = target ? `${target.name} [${target.type}]` : '?';
+                    logger.info(`    ${sourceLabel} composes ${targetLabel}`);
                 }
             }
 
