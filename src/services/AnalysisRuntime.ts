@@ -421,6 +421,44 @@ export class AnalysisRuntime {
     }
 
     /**
+     * 公共接口：清空图并重建
+     * 用于用户主动触发的完整图重置和重新扫描场景
+     */
+    public async clearAndRebuildGraph(): Promise<void> {
+        logger.info('[AnalysisRuntime] 清空图并准备重建...');
+
+        // 1. 清空内存图结构
+        this.projectGraph.clearAll();
+
+        // 2. 清空本地持久化索引与历史图快照、遗留任务，防止旧指纹复活干扰分析
+        if (this.syncService) {
+            await this.syncService.clearIndex();
+            await this.syncService.saveSnapshot(this.projectGraph);
+            this.syncService.savePendingTasksSync([]);
+            logger.info('[AnalysisRuntime] 本地索引、遗留任务及历史快照已清零');
+        }
+
+        // 3. 清空任务队列，取消待处理删除
+        this.taskQueue = [];
+        this.uncommittedTasks.clear();
+        for (const timer of this.pendingDeletions.values()) {
+            clearTimeout(timer);
+        }
+        this.pendingDeletions.clear();
+        logger.info('[AnalysisRuntime] 任务队列已清空');
+
+        // 4. 重新初始化 readyPromise
+        this.readyPromise = new Promise((resolve) => {
+            this.resolveReady = resolve;
+        });
+
+        // 5. 触发完整重新扫描和增量同步
+        logger.info('[AnalysisRuntime] 开始重新扫描工作区...');
+        await this.runIncrementalSync();
+        logger.info('[AnalysisRuntime] 图重建完成！');
+    }
+
+    /**
      * 释放运行时注册的资源（如事件监听器）
      */
     public dispose(): void {

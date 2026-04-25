@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { IRNode, NodeType, EdgeData, FileSymbolsPayload } from '../models/GraphDefinition';
 import { LSPService } from './LSPServices';
-import { InheritanceExtractor, CompositionExtractor } from '../adapters/Extractor';
+import { InheritanceExtractor, CompositionExtractor, DependencyExtractor } from '../adapters/Extractor';
 import { SymbolRule } from '../models/SymbolRule';
 import { logger } from '../utils/logger';
 
@@ -91,6 +91,14 @@ export class AdapterService {
 
         edges.push(...compositionResult.edges);
         nodes.push(...compositionResult.placeholderNodes);
+
+        // 4. 依赖 关系抽取（方法参数与返回值提取等）
+        logger.info(`[AdapterService.extractFileSymbols] 开始提取依赖关系（方法签名分析）`);
+        const dependencyResult = await DependencyExtractor.analyze(document, symbolIndex, uriString, document.languageId);
+        logger.info(`[AdapterService.extractFileSymbols] 依赖关系提取完毕: ${dependencyResult.edges.length} 条边, ${dependencyResult.placeholderNodes.length} 个占位符节点`);
+
+        edges.push(...dependencyResult.edges);
+        nodes.push(...dependencyResult.placeholderNodes);
 
         const result: FileSymbolsPayload = {
             uri: uriString,

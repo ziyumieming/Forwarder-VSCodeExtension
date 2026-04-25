@@ -65,6 +65,21 @@ export class LSPService {
         }
     }
 
+    // 获取特定位置的普通定义信息（用于依赖关系分析中的参数/返回值跳转）
+    public static async getDefinition(uri: vscode.Uri, position: vscode.Position): Promise<vscode.Location[] | vscode.LocationLink[] | undefined> {
+        try {
+            const definitions = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
+                'vscode.executeDefinitionProvider',
+                uri,
+                position
+            );
+            return definitions;
+        } catch (err) {
+            logger.info(`[LSPService] 获取普通定义失败: ${uri.toString()}`);
+            return undefined;
+        }
+    }
+
     // 根据当前光标位置自动寻找并获取函数信息
     public static async getActiveFunction(): Promise<FunctionInfo | undefined> {
         const editor = vscode.window.activeTextEditor;

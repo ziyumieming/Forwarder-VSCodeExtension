@@ -2,10 +2,30 @@ import * as vscode from 'vscode';
 import { AdapterService } from '../services/AdapterServices';
 import { LSPService } from '../services/LSPServices';
 import { ViewQueryService } from '../services/ViewServices';
+import { AnalysisRuntime } from '../services/AnalysisRuntime';
 import { ProjectGraph } from '../models/GraphManager';
 import { logger } from '../utils/logger';
 
 export class DebugController {
+    /**
+     * 清空并重建整个代码图结构
+     */
+    public static async debugClearAndRebuildGraph(): Promise<void> {
+        const runtime = AnalysisRuntime.getInstance();
+
+        logger.info('[DebugController] 用户触发图清空和重建...');
+        try {
+            await runtime.clearAndRebuildGraph();
+            logger.info('[DebugController] ✅ 图清空和重建完成！');
+            vscode.window.showInformationMessage('✅ 代码图已清空并重建完成！');
+        } catch (error) {
+            logger.error(`[DebugController] ❌ 图清空和重建失败: ${error}`);
+            vscode.window.showErrorMessage(`❌ 图清空和重建失败: ${error}`);
+        } finally {
+            logger.show();
+        }
+    }
+
     /**
      * 分析当前活跃文件，并输出LSP解析结果和GraphService处理结果到Channel
      */
@@ -235,7 +255,23 @@ export class DebugController {
             }
         }
 
-        // 查询 5: 节点邻接网络 - 找出第一个class或interface节点作为示例
+        // 查询 5: uses 关系（方法签名中的依赖关系）
+        const usesData = ViewQueryService.queryGlobalRelation(graph, ['uses'], true);
+        logger.info(`\n  ├─ Uses 关系查询结果:`);
+        logger.info(`    节点数: ${usesData.nodes.length}, 边数: ${usesData.edges.length}`);
+        if (usesData.edges.length > 0) {
+            const nodeMap = new Map(usesData.nodes.map(n => [n.id, n]));
+            usesData.edges.slice(0, 5).forEach(edge => {
+                const source = nodeMap.get(edge.sourceId);
+                const target = nodeMap.get(edge.targetId);
+                logger.info(`      ${source?.name || '?'} uses ${target?.name || '?'}`);
+            });
+            if (usesData.edges.length > 5) {
+                logger.info(`      ... 以及 ${usesData.edges.length - 5} 条边（省略）`);
+            }
+        }
+
+        // 查询 6: 节点邻接网络 - 找出第一个class或interface节点作为示例
         const targetNode = nodes.find(n => n.type === 'class' || n.type === 'interface');
         if (targetNode) {
             logger.info(`\n  └─ 节点邻接网络查询示例 (节点: ${targetNode.name}):`);
@@ -497,6 +533,24 @@ export class DebugController {
                     const sourceLabel = source ? `${source.name} [${source.type}]` : '?';
                     const targetLabel = target ? `${target.name} [${target.type}]` : '?';
                     logger.info(`    ${sourceLabel} composes ${targetLabel}`);
+                }
+            }
+
+            // 查询 uses 关系（方法签名中的依赖关系）
+            logger.info(`\n[7] Querying 'uses' relations:`);
+            const usesData = ViewQueryService.queryGlobalRelation(graph, ['uses'], true);
+            logger.info(`    Nodes: ${usesData.nodes.length}, Edges: ${usesData.edges.length}\n`);
+
+            if (usesData.edges.length === 0) {
+                logger.info(`    (no 'uses' relations found)\n`);
+            } else {
+                const nodeMap = new Map(usesData.nodes.map(n => [n.id, n]));
+                for (const edge of usesData.edges) {
+                    const source = nodeMap.get(edge.sourceId);
+                    const target = nodeMap.get(edge.targetId);
+                    const sourceLabel = source ? `${source.name} [${source.type}]` : '?';
+                    const targetLabel = target ? `${target.name} [${target.type}]` : '?';
+                    logger.info(`    ${sourceLabel} uses ${targetLabel}`);
                 }
             }
 

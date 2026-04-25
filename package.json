@@ -33,6 +33,10 @@
       {
         "command": "forwarder.debug.queryRelations",
         "title": "Debug: 诊断图解析能力"
+      },
+      {
+        "command": "forwarder.debug.clearAndRebuild",
+        "title": "Debug: 清空并重建代码图"
       }
     ],
     "viewsContainers": {
