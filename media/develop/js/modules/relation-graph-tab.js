@@ -43,6 +43,7 @@
         var getQueryDuplicateWindowMs = typeof safeContext.getQueryDuplicateWindowMs === 'function' ? safeContext.getQueryDuplicateWindowMs : function () { return 220; };
         var animateCenterNodeViewport = typeof safeContext.animateCenterNodeViewport === 'function' ? safeContext.animateCenterNodeViewport : noop;
         var lockCenterNodeViewport = typeof safeContext.lockCenterNodeViewport === 'function' ? safeContext.lockCenterNodeViewport : noop;
+        var isActiveTab = typeof safeContext.isActiveTab === 'function' ? safeContext.isActiveTab : function () { return true; };
         var suppressNodeTapNodeId = null;
         var suppressNodeTapUntil = 0;
 
@@ -236,6 +237,10 @@
         }
 
         function onNodeTap(node) {
+            if (!isActiveTab()) {
+                return;
+            }
+
             var tappedNodeId = String(node.id());
 
             if (suppressNodeTapNodeId === tappedNodeId && Date.now() <= suppressNodeTapUntil) {
@@ -325,6 +330,10 @@
         }
 
         function onNodeContextTap(node) {
+            if (!isActiveTab()) {
+                return;
+            }
+
             var tappedNodeId = String(node.id());
             if (!getCurrentCenterNodeId() || tappedNodeId !== String(getCurrentCenterNodeId())) {
                 return;
@@ -334,6 +343,10 @@
         }
 
         function onBackgroundContextTap() {
+            if (!isActiveTab()) {
+                return;
+            }
+
             if (toggleCenterPresentation('background-context')) {
                 return;
             }

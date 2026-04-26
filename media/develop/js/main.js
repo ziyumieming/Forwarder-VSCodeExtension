@@ -43,7 +43,9 @@
     const graphFocusModule = window.AnalysisModules?.GraphFocus;
     const centerPresentationModule = window.AnalysisModules?.CenterPresentation;
     const relationGraphTabModule = window.AnalysisModules?.RelationGraphTab;
+    const callGraphTabModule = window.AnalysisModules?.CallGraphTab;
     let relationGraphTab = null;
+    let callGraphTab = null;
 
     if (graphIncrementalModule && typeof graphIncrementalModule.createEmptyGraphSnapshot === 'function') {
         latestGraphSnapshot = graphIncrementalModule.createEmptyGraphSnapshot();
@@ -480,18 +482,37 @@
         return false;
     };
 
-    function renderGraphData(graphData) {
+    function clearCanvas(reason = 'clear-canvas') {
+        layoutAnimationToken += 1;
+        cy.elements().remove();
+        latestGraphSnapshot = graphIncrementalModule && typeof graphIncrementalModule.createEmptyGraphSnapshot === 'function'
+            ? graphIncrementalModule.createEmptyGraphSnapshot()
+            : {
+                nodes: new Map(),
+                edges: new Map()
+            };
+        clearGlobalToNodeTransitionMask(reason);
+        log('renderer', 'info', 'canvas cleared', { reason });
+    }
+
+    function renderGraphData(graphData, options = {}) {
         const animationToken = ++layoutAnimationToken;
+        const renderRequestMode = options.requestMode || lastRequestMode;
+        const presentationMode = options.presentationMode || 'class-card';
+        const renderCenterNodeId = options.currentCenterNodeId !== undefined
+            ? (options.currentCenterNodeId ? String(options.currentCenterNodeId) : null)
+            : currentCenterNodeId;
+        const renderCenterCardEnabled = presentationMode === 'class-card' && centerCardEnabled;
         const normalized = graphPipelineModule && typeof graphPipelineModule.normalizeGraphData === 'function'
             ? graphPipelineModule.normalizeGraphData({
                 graphData,
                 state: {
-                    currentCenterNodeId,
-                    centerCardEnabled,
-                    htmlNodePluginReady,
-                    pendingCenterDetailsNodeId
+                    currentCenterNodeId: renderCenterNodeId,
+                    centerCardEnabled: renderCenterCardEnabled,
+                    htmlNodePluginReady: presentationMode === 'class-card' && htmlNodePluginReady,
+                    pendingCenterDetailsNodeId: presentationMode === 'class-card' ? pendingCenterDetailsNodeId : null
                 },
-                presentationMode: 'class-card',
+                presentationMode,
                 centerDetailsCache,
                 classCardModelCache,
                 getClassCardOptions,
@@ -524,20 +545,22 @@
 
         const { elements, snapshot } = normalized;
         const isGlobalToNodeTransition = !!pendingGlobalToNodeTransition
-            && lastRequestMode === 'relation-node'
-            && !!currentCenterNodeId
-            && pendingGlobalToNodeTransition.centerNodeId === String(currentCenterNodeId);
+            && renderRequestMode === 'relation-node'
+            && !!renderCenterNodeId
+            && pendingGlobalToNodeTransition.centerNodeId === String(renderCenterNodeId);
 
         log('state', 'info', 'render graph data', {
             elementCount: elements.length,
-            currentCenterNodeId,
+            currentCenterNodeId: renderCenterNodeId,
+            presentationMode,
+            requestMode: renderRequestMode,
             incomingNodes: Array.isArray(graphData?.nodes) ? graphData.nodes.length : -1,
             incomingEdges: Array.isArray(graphData?.edges) ? graphData.edges.length : -1,
             hasCenterDetails: !!graphData?.centerDetails
         });
 
         let incrementalResult = null;
-        if (lastRequestMode === 'relation-node') {
+        if (renderRequestMode === 'relation-node') {
             if (graphIncrementalModule && typeof graphIncrementalModule.applyIncremental === 'function') {
                 incrementalResult = graphIncrementalModule.applyIncremental({
                     previousSnapshot: latestGraphSnapshot,
@@ -565,7 +588,7 @@
             latestGraphSnapshot = snapshot;
         }
 
-        if (lastRequestMode === 'relation-global') {
+        if (renderRequestMode === 'relation-global') {
             setCenterNode(null, 'render:global');
             pendingCenterDetailsNodeId = null;
             if (centerStateModule && typeof centerStateModule.setPendingCenterDetailsNodeId === 'function') {
@@ -591,7 +614,9 @@
                 });
             }
         }
-        if (centerPresentationModule && typeof centerPresentationModule.applyCenterCardPresentation === 'function') {
+        if (presentationMode === 'class-card'
+            && centerPresentationModule
+            && typeof centerPresentationModule.applyCenterCardPresentation === 'function') {
             centerPresentationModule.applyCenterCardPresentation({
                 cy,
                 currentCenterNodeId,
@@ -615,17 +640,18 @@
         };
 
         const shouldRunLayout =
-            lastRequestMode !== 'relation-node'
+            options.skipLayout !== true
+            && (renderRequestMode !== 'relation-node'
             || !incrementalResult
-            || incrementalResult.structuralChange;
+            || incrementalResult.structuralChange);
 
-        if (lastRequestMode === 'relation-node') {
+        if (renderRequestMode === 'relation-node') {
             const nodeModeLayoutOptions = layoutManagerModule && typeof layoutManagerModule.getNodeModeLayoutOptions === 'function'
                 ? layoutManagerModule.getNodeModeLayoutOptions({
                     fit: false,
                     animate: layoutOptions.animate,
                     animationDurationScale: getAnimationDurationScale(),
-                    currentCenterNodeId,
+                    currentCenterNodeId: renderCenterNodeId,
                     getDefaultLayout: () => window.AnalysisStyle.getDefaultLayout()
                 })
                 : {
@@ -634,6 +660,14 @@
                     animate: layoutOptions.animate
                 };
             Object.assign(layoutOptions, nodeModeLayoutOptions);
+        }
+
+        if (renderRequestMode === 'call-graph') {
+            Object.assign(layoutOptions, window.AnalysisStyle.getAltLayout(), {
+                directed: true,
+                fit: true,
+                padding: 90
+            });
         }
 
         if (layoutOptions.animate) {
@@ -660,7 +694,7 @@
             return;
         }
 
-        if (lastRequestMode === 'relation-global') {
+        if (renderRequestMode === 'relation-global') {
             const usedGlobalSmoothLayout = layoutManagerModule
                 && typeof layoutManagerModule.runGlobalSmoothLayout === 'function'
                 && layoutManagerModule.runGlobalSmoothLayout({
@@ -676,7 +710,7 @@
             }
         }
 
-        if (lastRequestMode === 'relation-node' && incrementalResult?.mode === 'incremental') {
+        if (renderRequestMode === 'relation-node' && incrementalResult?.mode === 'incremental') {
             const usedStagger = layoutManagerModule
                 && typeof layoutManagerModule.runNodeStaggerEnterLayout === 'function'
                 && layoutManagerModule.runNodeStaggerEnterLayout({
@@ -684,8 +718,8 @@
                     animationToken,
                     layoutAnimationToken,
                     incrementalResult,
-                    currentCenterNodeId,
-                    lastRequestMode,
+                    currentCenterNodeId: renderCenterNodeId,
+                    lastRequestMode: renderRequestMode,
                     animationDurationScale: getAnimationDurationScale(),
                     getDefaultLayout: () => window.AnalysisStyle.getDefaultLayout(),
                     log,
@@ -717,8 +751,8 @@
         }
 
         let lockedCenterNodeForTransitionLayout = null;
-        if (isGlobalToNodeTransition && currentCenterNodeId) {
-            const centerNodeForTransitionLayout = cy.getElementById(String(currentCenterNodeId));
+        if (isGlobalToNodeTransition && renderCenterNodeId) {
+            const centerNodeForTransitionLayout = cy.getElementById(String(renderCenterNodeId));
             if (centerNodeForTransitionLayout
                 && centerNodeForTransitionLayout.length > 0
                 && centerNodeForTransitionLayout.isNode()) {
@@ -812,11 +846,38 @@
             animateCenterNodeViewport,
             lockCenterNodeViewport,
             centerLockZoom: CENTER_LOCK_ZOOM,
-            centerOverviewZoom: CENTER_OVERVIEW_ZOOM
+            centerOverviewZoom: CENTER_OVERVIEW_ZOOM,
+            isActiveTab: () => !tabManagerModule
+                || typeof tabManagerModule.getActiveTabId !== 'function'
+                || tabManagerModule.getActiveTabId() === 'relationGraph'
         });
 
         relationGraphTab.bindGraphEvents();
         relationGraphTab.bindToolbar();
+    }
+
+    if (callGraphTabModule && typeof callGraphTabModule.create === 'function') {
+        callGraphTab = callGraphTabModule.create({
+            cy,
+            selectionStore: selectionStoreModule,
+            log,
+            clearCanvas,
+            renderGraphData: (graphData, options = {}) => renderGraphData(graphData, {
+                ...options,
+                presentationMode: 'simple-node',
+                requestMode: 'call-graph'
+            }),
+            isActiveTab: () => tabManagerModule
+                && typeof tabManagerModule.getActiveTabId === 'function'
+                && tabManagerModule.getActiveTabId() === 'callGraph'
+        });
+
+        if (typeof callGraphTab.bindToolbar === 'function') {
+            callGraphTab.bindToolbar();
+        }
+        if (typeof callGraphTab.bindGraphEvents === 'function') {
+            callGraphTab.bindGraphEvents();
+        }
     }
 
     // 监听来自后端的消息
@@ -870,6 +931,13 @@
                 return;
             }
 
+            if (responseRequestMode === 'call-graph'
+                && callGraphTab
+                && typeof callGraphTab.renderGraphData === 'function') {
+                callGraphTab.renderGraphData(data.data);
+                return;
+            }
+
             if (relationGraphTab
                 && typeof relationGraphTab.handleBackendMessage === 'function'
                 && !relationGraphTab.handleBackendMessage(data, responseMeta)) {
@@ -915,19 +983,7 @@
 
     if (tabManagerModule && typeof tabManagerModule.register === 'function') {
         tabManagerModule.register('relationGraph', relationGraphTab || {});
-        tabManagerModule.register('callGraph', {
-            onActivate: (event) => {
-                log('state', 'info', 'activate call graph placeholder tab', {
-                    ...event,
-                    selectedFunctions: selectionStoreModule && typeof selectionStoreModule.getSnapshot === 'function'
-                        ? selectionStoreModule.getSnapshot().functionIds.length
-                        : 0
-                });
-            },
-            onDeactivate: (event) => {
-                log('state', 'info', 'deactivate call graph placeholder tab', event || {});
-            }
-        });
+        tabManagerModule.register('callGraph', callGraphTab || {});
         tabManagerModule.activate('relationGraph', 'startup');
     }
 

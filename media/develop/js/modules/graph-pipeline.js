@@ -327,6 +327,77 @@
             }
         }
 
+        var callRoleByNodeId = new Map();
+        var currentCenterText = currentCenterNodeId ? String(currentCenterNodeId) : null;
+        if (!classCardPresentationEnabled && currentCenterText) {
+            var outgoingCallsBySource = new Map();
+            var incomingCallsByTarget = new Map();
+            graphData.edges.forEach(function (edge) {
+                if (!edge) {
+                    return;
+                }
+
+                var relation = normalizeRelationLabel(edge.relation || edge.type);
+                if (relation !== 'calls') {
+                    return;
+                }
+
+                var source = edge.source || edge.sourceId || edge.from;
+                var target = edge.target || edge.targetId || edge.to;
+                if (!source || !target) {
+                    return;
+                }
+
+                var sourceId = String(source);
+                var targetId = String(target);
+
+                if (!outgoingCallsBySource.has(sourceId)) {
+                    outgoingCallsBySource.set(sourceId, []);
+                }
+                outgoingCallsBySource.get(sourceId).push(targetId);
+
+                if (!incomingCallsByTarget.has(targetId)) {
+                    incomingCallsByTarget.set(targetId, []);
+                }
+                incomingCallsByTarget.get(targetId).push(sourceId);
+            });
+
+            callRoleByNodeId.set(currentCenterText, 'center');
+
+            function markCallRole(nodeId, role) {
+                if (nodeId === currentCenterText) {
+                    return;
+                }
+
+                var existingRole = callRoleByNodeId.get(nodeId);
+                if (!existingRole) {
+                    callRoleByNodeId.set(nodeId, role);
+                } else if (existingRole !== role) {
+                    callRoleByNodeId.set(nodeId, 'both');
+                }
+            }
+
+            function walkCallDirection(seedId, adjacency, role) {
+                var visited = new Set([seedId]);
+                var queue = [seedId];
+
+                while (queue.length > 0) {
+                    var currentId = queue.shift();
+                    var neighbors = adjacency.get(currentId) || [];
+                    neighbors.forEach(function (neighborId) {
+                        markCallRole(neighborId, role);
+                        if (!visited.has(neighborId)) {
+                            visited.add(neighborId);
+                            queue.push(neighborId);
+                        }
+                    });
+                }
+            }
+
+            walkCallDirection(currentCenterText, outgoingCallsBySource, 'outgoing');
+            walkCallDirection(currentCenterText, incomingCallsByTarget, 'incoming');
+        }
+
         var nodeElements = graphData.nodes
             .filter(function (node) {
                 return !!(node && node.id);
@@ -348,9 +419,23 @@
                 var isCenterClassCard = classCardPresentationEnabled && !!currentCenterNodeId && centerCardEnabled && currentCenterNodeId === id;
                 var useHtmlCard = isCenterClassCard && htmlNodePluginReady;
                 var cardSize = classCardPresentationEnabled ? estimateCardSize(classCard) : { width: 0, height: 0 };
+                var isCenterSimpleNode = !classCardPresentationEnabled && !!currentCenterNodeId && currentCenterNodeId === id;
+                var callRole = isCenterSimpleNode ? 'center' : (callRoleByNodeId.get(id) || 'neutral');
+                var simpleNodeClasses = [];
 
                 if (classCardPresentationEnabled && classCardModelCache instanceof Map) {
                     classCardModelCache.set(id, classCard);
+                }
+
+                if (!classCardPresentationEnabled) {
+                    simpleNodeClasses.push('call-graph-node');
+                    simpleNodeClasses.push('call-' + callRole);
+                    if (node.isLibrary || node.placeHolder) {
+                        simpleNodeClasses.push('call-library');
+                    }
+                    if (node.type) {
+                        simpleNodeClasses.push('node-kind-' + String(node.type));
+                    }
                 }
 
                 return {
@@ -364,9 +449,12 @@
                         htmlCardMarkup: useHtmlCard ? buildHtmlClassCard(id, classCard) : '',
                         cardWidth: cardSize.width,
                         cardHeight: cardSize.height,
-                        nodeKind: node.type || 'node'
+                        nodeKind: node.type || 'node',
+                        isLibrary: node.isLibrary || node.placeHolder ? 1 : 0,
+                        callRole: callRole,
+                        isCenter: isCenterSimpleNode ? 1 : 0
                     },
-                    classes: isCenterClassCard ? 'center-class-card' : ''
+                    classes: isCenterClassCard ? 'center-class-card' : simpleNodeClasses.join(' ')
                 };
             });
 
@@ -405,6 +493,33 @@
             .map(function (entry) {
                 var relations = Array.from(entry.relations).sort(sortRelationLabels);
                 var relationLabel = relations.join(' / ');
+                var edgeClasses = [];
+                var callDirectionRole = 'neutral';
+
+                if (!classCardPresentationEnabled && relations.indexOf('calls') >= 0) {
+                    edgeClasses.push('call-edge');
+
+                    if (currentCenterText && entry.source === currentCenterText && entry.target === currentCenterText) {
+                        callDirectionRole = 'recursive';
+                        edgeClasses.push('call-recursive-edge');
+                    } else if (currentCenterText
+                        && (entry.source === currentCenterText
+                            || callRoleByNodeId.get(entry.source) === 'outgoing'
+                            || callRoleByNodeId.get(entry.target) === 'outgoing')) {
+                        callDirectionRole = 'outgoing';
+                        edgeClasses.push('call-outgoing-edge');
+                    } else if (currentCenterText
+                        && (entry.target === currentCenterText
+                            || callRoleByNodeId.get(entry.source) === 'incoming'
+                            || callRoleByNodeId.get(entry.target) === 'incoming')) {
+                        callDirectionRole = 'incoming';
+                        edgeClasses.push('call-incoming-edge');
+                    }
+
+                    if (graphData.meta && graphData.meta.pathFound) {
+                        edgeClasses.push('call-path-edge');
+                    }
+                }
 
                 return {
                     data: {
@@ -412,8 +527,10 @@
                         source: entry.source,
                         target: entry.target,
                         type: relationLabel,
-                        relations: relations
-                    }
+                        relations: relations,
+                        callDirectionRole: callDirectionRole
+                    },
+                    classes: edgeClasses.join(' ')
                 };
             })
             .filter(function (edge) {

@@ -49,6 +49,7 @@ export class AnalysisViewProvider implements vscode.WebviewViewProvider {
         const moduleGraphFocusScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'graph-focus.js'));
         const moduleCenterPresentationScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'center-presentation.js'));
         const moduleRelationGraphTabScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'relation-graph-tab.js'));
+        const moduleCallGraphTabScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'call-graph-tab.js'));
         const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'css', 'main.css'));
         const cytoscapeUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'public', 'cytoscape.min.js'));
         const cytoscapeHtmlNodeUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'public', 'cytoscape-html-node.js'));
@@ -81,6 +82,7 @@ export class AnalysisViewProvider implements vscode.WebviewViewProvider {
                 .replace(/{{moduleGraphFocusScriptUri}}/g, moduleGraphFocusScriptUri.toString())
                 .replace(/{{moduleCenterPresentationScriptUri}}/g, moduleCenterPresentationScriptUri.toString())
                 .replace(/{{moduleRelationGraphTabScriptUri}}/g, moduleRelationGraphTabScriptUri.toString())
+                .replace(/{{moduleCallGraphTabScriptUri}}/g, moduleCallGraphTabScriptUri.toString())
                 .replace(/{{cytoscapeUri}}/g, cytoscapeUri.toString())
                 .replace(/{{cytoscapeHtmlNodeUri}}/g, cytoscapeHtmlNodeUri.toString())
                 .replace(/{{nonce}}/g, nonce);

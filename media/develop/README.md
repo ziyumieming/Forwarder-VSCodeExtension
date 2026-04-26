@@ -25,7 +25,7 @@ The Webview frontend keeps non-ESM script loading and now uses a tab shell aroun
 ### View Model
 
 - `relationGraph`: the current class/relation graph. It owns relation queries, node dependency queries, center-card behavior, and graph interaction replay.
-- `callGraph`: placeholder tab for the upcoming function call graph page. It shares the same canvas and global selection store but has no feature UI yet.
+- `callGraph`: function call graph page shell. It owns call-specific parameter state, empty state, simple-node interactions, and the ordered path tag tray. Backend queries are intentionally not wired in this phase.
 - Both tabs reuse the same `#cy` Cytoscape instance. Switching tabs changes toolbar visibility and active controller, not the canvas element.
 
 ### Script Load Order
@@ -54,6 +54,7 @@ The injection mapping is defined in src/providers/AnalysisView.ts and consumed b
 - modules/card-render.js: card render orchestration
 - modules/viewport-animation.js: center viewport lock/animate helpers
 - modules/relation-graph-tab.js: relation graph queries, node interactions, replay, and stale node-response checks
+- modules/call-graph-tab.js: call graph UI state, simple-node click/context interactions, and ordered path tag tray
 - main.js: bootstrap, dependency wiring, shared render pipeline, backend message dispatch
 
 ### Request Modes
@@ -67,12 +68,23 @@ The injection mapping is defined in src/providers/AnalysisView.ts and consumed b
 
 Tab code should pass `meta.requestMode` explicitly when sending queries.
 
+The Call Graph tab currently does not send `queryFunctionCallGraph` or `queryFunctionCallPath`; it only prepares UI state and local interactions. The intended next integration point is `call-graph-tab.js`, using `query-service.js` with `requestMode='call-graph'` or `requestMode='call-path'`.
+
 ### Graph Presentation Modes
 
 `GraphPipeline.normalizeGraphData` supports presentation options:
 
 - `class-card`: current relation graph behavior with center class-card data.
-- `simple-node`: reserved for future call graph rendering without class-card data.
+- `simple-node`: function call graph behavior without class-card data. It preserves circular nodes and adds call-specific classes such as center, incoming, outgoing, library, recursive edge, and path edge.
+
+### Call Graph UI Shell
+
+- The toolbar exposes only query parameters and controls: depth, direction, external-scope toggle, and Query/Fit/Layout/Clear actions.
+- The canvas shows an empty overlay until a center function is selected; no fake graph is rendered.
+- The bottom tray exposes a compact ordered list of function tags. Tags can be removed and reordered by drag-and-drop.
+- Node left-click in Call Graph mode sets the local center function. Node right-click opens actions for adding a function to the ordered path tray or selecting it as center.
+- Ordered path tags are a frontend representation of future waypoint path queries. The current backend only supports two-endpoint shortest paths; a later backend step can query adjacent waypoints pairwise and stitch the resulting path segments.
+- Class graph member actions, editor context menu entry, shortcuts, and backend path validation are deferred to the next integration phase.
 
 ## Consistency Guardrails
 

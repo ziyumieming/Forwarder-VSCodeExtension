@@ -61,6 +61,61 @@
                     }
                 },
                 {
+                    selector: 'node.call-graph-node',
+                    style: {
+                        shape: 'ellipse',
+                        width: 58,
+                        height: 58,
+                        padding: '8px',
+                        'background-color': '#5aa2d5',
+                        'border-width': 2,
+                        'border-color': '#c9dff0',
+                        'font-size': 10,
+                        'text-max-width': 96,
+                        'line-height': 1.12
+                    }
+                },
+                {
+                    selector: 'node.call-center',
+                    style: {
+                        'background-color': '#f3b23a',
+                        'border-color': '#ffe3ad',
+                        'border-width': 3,
+                        color: '#241808',
+                        width: 72,
+                        height: 72,
+                        'font-weight': 700
+                    }
+                },
+                {
+                    selector: 'node.call-incoming',
+                    style: {
+                        'background-color': '#4f86d9',
+                        'border-color': '#bcd6ff'
+                    }
+                },
+                {
+                    selector: 'node.call-outgoing',
+                    style: {
+                        'background-color': '#44a987',
+                        'border-color': '#b9ead8'
+                    }
+                },
+                {
+                    selector: 'node.call-both',
+                    style: {
+                        'background-color': '#8f7bd9',
+                        'border-color': '#ddd4ff'
+                    }
+                },
+                {
+                    selector: 'node.call-library',
+                    style: {
+                        'border-style': 'dashed',
+                        'background-opacity': 0.78
+                    }
+                },
+                {
                     selector: 'edge',
                     style: {
                         width: 1.6,
@@ -74,6 +129,47 @@
                         'text-background-color': '#0a1a2a',
                         'text-background-opacity': 0.7,
                         'text-background-padding': '2px'
+                    }
+                },
+                {
+                    selector: 'edge.call-edge',
+                    style: {
+                        width: 2.2,
+                        'curve-style': 'bezier',
+                        label: '',
+                        'target-arrow-shape': 'triangle'
+                    }
+                },
+                {
+                    selector: 'edge.call-incoming-edge',
+                    style: {
+                        'line-color': '#6f9ee8',
+                        'target-arrow-color': '#6f9ee8'
+                    }
+                },
+                {
+                    selector: 'edge.call-outgoing-edge',
+                    style: {
+                        'line-color': '#5bc69f',
+                        'target-arrow-color': '#5bc69f'
+                    }
+                },
+                {
+                    selector: 'edge.call-path-edge',
+                    style: {
+                        width: 3.2,
+                        'line-color': '#f3b23a',
+                        'target-arrow-color': '#f3b23a'
+                    }
+                },
+                {
+                    selector: 'edge.call-recursive-edge',
+                    style: {
+                        'curve-style': 'bezier',
+                        label: 'rec',
+                        color: '#d7c8ff',
+                        'line-color': '#9f8ee8',
+                        'target-arrow-color': '#9f8ee8'
                     }
                 },
                 {

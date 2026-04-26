@@ -65,15 +65,65 @@
             </div>
         </div>
         <div class="tab-toolbar call-graph-toolbar" data-tab-toolbar="callGraph" hidden>
-            <div class="query-options call-graph-placeholder" aria-label="Call Graph Options">
-                <span class="option-title">Call Graph</span>
-                <span class="option-note">Coming next</span>
+            <div class="query-options call-options" aria-label="Call Graph Options">
+                <span class="option-title">Call</span>
+                <label class="option-item compact-option" for="call-depth">
+                    <span>Depth</span>
+                    <select id="call-depth" class="nav-select" aria-label="Call graph depth">
+                    <option value="1">1</option>
+                    <option value="2" selected>2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                    </select>
+                </label>
+                <label class="option-item compact-option" for="call-direction">
+                    <span>Direction</span>
+                    <select id="call-direction" class="nav-select nav-select-wide" aria-label="Call graph direction">
+                    <option value="both" selected>Both</option>
+                    <option value="outgoing">Outgoing</option>
+                    <option value="incoming">Incoming</option>
+                    </select>
+                </label>
+            </div>
+            <div class="query-options call-scope-options" aria-label="Call Graph Scope">
+                <span class="option-title">Scope</span>
+                <label class="option-item" for="call-include-external">
+                    <input id="call-include-external" type="checkbox" />
+                    <span>Include External</span>
+                </label>
+            </div>
+            <div class="center controls">
+                <button id="btn-call-fit" class="nav-btn">Fit</button>
+                <button id="btn-call-layout" class="nav-btn">Layout</button>
+                <button id="btn-call-clear" class="nav-btn">Clear</button>
+            </div>
+            <div class="right controls">
+                <button id="btn-call-query" class="nav-btn nav-btn-primary" disabled>Query</button>
             </div>
         </div>
     </nav>
 
     <main class="canvas-wrap">
         <div id="cy" aria-label="Cytoscape Canvas"></div>
+        <div id="call-empty-overlay" class="call-empty-overlay" hidden>
+            <div class="call-empty-panel">
+                <div class="call-empty-title">Select a function to inspect calls</div>
+                <div class="call-empty-text">Use a function node as the center, or choose a candidate from the path slots.</div>
+                <button id="btn-call-use-slot-center" class="nav-btn nav-btn-primary" type="button" disabled>Use as Center</button>
+            </div>
+        </div>
+        <div id="call-context-menu" class="call-context-menu" hidden role="menu" aria-label="Call graph node actions">
+            <button type="button" data-call-action="add">Add to Path Slot</button>
+            <button type="button" data-call-action="center">Set as Center</button>
+        </div>
+        <section id="call-path-tray" class="call-path-tray" hidden aria-label="Call Path Slots">
+            <div class="call-tray-header">
+                <span class="call-tray-title">Path Order</span>
+                <span id="call-path-hint" class="call-tray-hint">Add functions to define waypoint order.</span>
+            </div>
+            <div id="call-path-chip-list" class="call-path-chip-list" aria-label="Ordered function path"></div>
+        </section>
     </main>
 
     <script nonce="{{nonce}}" src="{{cytoscapeUri}}"></script>
@@ -97,6 +147,7 @@
     <script nonce="{{nonce}}" src="{{moduleGraphFocusScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleCenterPresentationScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleRelationGraphTabScriptUri}}"></script>
+    <script nonce="{{nonce}}" src="{{moduleCallGraphTabScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{mainScriptUri}}"></script>
 </body>
 
