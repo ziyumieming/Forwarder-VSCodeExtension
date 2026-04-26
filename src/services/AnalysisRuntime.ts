@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ProjectGraph } from '../models/GraphManager';
 import { AdapterService } from './AdapterServices';
-import { ViewQueryService } from './ViewServices';
+import { CallGraphDirection, ViewQueryService } from './ViewServices';
 import { SynchronizationService } from './SynchronizationServices';
 import { GatingService } from './GatingServices';
 import { EdgeRelation, GraphViewData } from '../models/GraphDefinition';
@@ -442,6 +442,41 @@ export class AnalysisRuntime {
         await this.readyPromise;
         await this.waitForQueueIdle(this.analysisGeneration);
         return ViewQueryService.queryNodeDependencies(this.projectGraph, nodeId, allowedRelations, includeExternal);
+    }
+
+    public async queryFunctionCallGraph(
+        nodeId: string,
+        direction?: CallGraphDirection,
+        depth?: number,
+        includeExternal?: boolean,
+        maxNodes?: number,
+        maxEdges?: number
+    ): Promise<GraphViewData> {
+        await this.readyPromise;
+        await this.waitForQueueIdle(this.analysisGeneration);
+        return ViewQueryService.queryFunctionCallGraph(this.projectGraph, nodeId, {
+            direction,
+            depth,
+            includeExternal,
+            maxNodes,
+            maxEdges
+        });
+    }
+
+    public async queryFunctionCallPath(
+        sourceId: string,
+        targetId: string,
+        direction?: CallGraphDirection,
+        maxDepth?: number,
+        includeExternal?: boolean
+    ): Promise<GraphViewData> {
+        await this.readyPromise;
+        await this.waitForQueueIdle(this.analysisGeneration);
+        return ViewQueryService.queryFunctionCallPath(this.projectGraph, sourceId, targetId, {
+            direction,
+            maxDepth,
+            includeExternal
+        });
     }
 
     /**

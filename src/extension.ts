@@ -49,6 +49,7 @@ export function activate(context: vscode.ExtensionContext) {
 	// Debug commands
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.analyze', () => DebugController.debugAnalyzeCurrentFile()));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.lspTypeHierarchy', () => DebugController.debugLSPTypeHierarchy()));
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.lspCallHierarchy', () => DebugController.debugLSPCallHierarchy()));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.queryRelations', () => DebugController.debugQueryRelations()));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.clearAndRebuild', () => DebugController.debugClearAndRebuildGraph()));
 

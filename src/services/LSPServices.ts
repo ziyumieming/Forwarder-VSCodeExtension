@@ -50,6 +50,52 @@ export class LSPService {
         }
     }
 
+    // 准备调用层次结构入口（用于函数/方法调用图）
+    public static async prepareCallHierarchy(uri: vscode.Uri, position: vscode.Position): Promise<vscode.CallHierarchyItem[] | undefined> {
+        try {
+            const items = await vscode.commands.executeCommand<vscode.CallHierarchyItem[] | vscode.CallHierarchyItem | undefined>(
+                'vscode.prepareCallHierarchy',
+                uri,
+                position
+            );
+
+            if (!items) {
+                return undefined;
+            }
+
+            return Array.isArray(items) ? items : [items];
+        } catch (err) {
+            logger.info(`[LSPService] 准备调用层次结构失败: ${uri.toString()}`);
+            return undefined;
+        }
+    }
+
+    // 获取指定 CallHierarchyItem 的下游调用
+    public static async getOutgoingCalls(item: vscode.CallHierarchyItem): Promise<vscode.CallHierarchyOutgoingCall[] | undefined> {
+        try {
+            return await vscode.commands.executeCommand<vscode.CallHierarchyOutgoingCall[]>(
+                'vscode.provideOutgoingCalls',
+                item
+            );
+        } catch (err) {
+            logger.info(`[LSPService] 获取下游调用失败: ${item.uri.toString()}#${item.name}`);
+            return undefined;
+        }
+    }
+
+    // 获取指定 CallHierarchyItem 的上游调用
+    public static async getIncomingCalls(item: vscode.CallHierarchyItem): Promise<vscode.CallHierarchyIncomingCall[] | undefined> {
+        try {
+            return await vscode.commands.executeCommand<vscode.CallHierarchyIncomingCall[]>(
+                'vscode.provideIncomingCalls',
+                item
+            );
+        } catch (err) {
+            logger.info(`[LSPService] 获取上游调用失败: ${item.uri.toString()}#${item.name}`);
+            return undefined;
+        }
+    }
+
     // 获取特定位置的定义信息（用于组合关系扫描）
     public static async getTypeDefinition(uri: vscode.Uri, position: vscode.Position): Promise<vscode.Location[] | vscode.LocationLink[] | undefined> {
         try {

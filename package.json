@@ -31,6 +31,10 @@
         "title": "Debug: 诊断LSP类型层次查询"
       },
       {
+        "command": "forwarder.debug.lspCallHierarchy",
+        "title": "Debug: 诊断LSP调用层次查询"
+      },
+      {
         "command": "forwarder.debug.queryRelations",
         "title": "Debug: 诊断图解析能力"
       },

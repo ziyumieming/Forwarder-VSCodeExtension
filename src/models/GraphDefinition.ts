@@ -51,6 +51,13 @@ export interface GraphViewData {
         fields?: { name: string; type?: string; signature?: string; range?: { start: LineCol; end: LineCol } }[];
         methods: { id: string; name: string }[];
     };
+    meta?: {
+        truncated?: boolean;
+        depth?: number;
+        direction?: 'incoming' | 'outgoing' | 'both';
+        pathFound?: boolean;
+        reason?: string;
+    };
 }
 
 export interface FileSymbolsPayload {

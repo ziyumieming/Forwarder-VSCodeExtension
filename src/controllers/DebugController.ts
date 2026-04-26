@@ -271,7 +271,23 @@ export class DebugController {
             }
         }
 
-        // 查询 6: aggregates 关系（外部注入对象写入字段）
+        // 查询 6: calls 关系（函数/方法调用）
+        const callsData = ViewQueryService.queryGlobalRelation(graph, ['calls'], true);
+        logger.info(`\n  ├─ Calls 关系查询结果:`);
+        logger.info(`    节点数: ${callsData.nodes.length}, 边数: ${callsData.edges.length}`);
+        if (callsData.edges.length > 0) {
+            const nodeMap = new Map(callsData.nodes.map(n => [n.id, n]));
+            callsData.edges.slice(0, 10).forEach(edge => {
+                const source = nodeMap.get(edge.sourceId);
+                const target = nodeMap.get(edge.targetId);
+                logger.info(`      ${source?.name || '?'} calls ${target?.name || '?'}`);
+            });
+            if (callsData.edges.length > 10) {
+                logger.info(`      ... 以及 ${callsData.edges.length - 10} 条边（省略）`);
+            }
+        }
+
+        // 查询 7: aggregates 关系（外部注入对象写入字段）
         const aggregatesData = ViewQueryService.queryGlobalRelation(graph, ['aggregates'], true);
         logger.info(`\n  ├─ Aggregates 关系查询结果:`);
         logger.info(`    节点数: ${aggregatesData.nodes.length}, 边数: ${aggregatesData.edges.length}`);
@@ -287,7 +303,7 @@ export class DebugController {
             }
         }
 
-        // 查询 7: 节点邻接网络 - 找出第一个class或interface节点作为示例
+        // 查询 8: 节点邻接网络 - 找出第一个class或interface节点作为示例
         const targetNode = nodes.find(n => n.type === 'class' || n.type === 'interface');
         if (targetNode) {
             logger.info(`\n  └─ 节点邻接网络查询示例 (节点: ${targetNode.name}):`);
@@ -407,6 +423,70 @@ export class DebugController {
     }
 
     /**
+     * 诊断 LSP 调用层次查询
+     * 以当前光标所在函数/方法为入口，输出 incoming/outgoing 调用。
+     */
+    public static async debugLSPCallHierarchy(): Promise<void> {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            logger.warn('No active editor');
+            logger.show();
+            return;
+        }
+
+        const uri = editor.document.uri;
+        const cursor = editor.selection.active;
+
+        logger.info(`\n========== Call Hierarchy ==========\nFile: ${uri.fsPath}\nPosition: ${cursor.line + 1}:${cursor.character + 1}\n`);
+
+        try {
+            const symbols = await LSPService.getDocumentSymbols(uri);
+            const callable = symbols ? this._findCallableSymbolAtPosition(symbols, cursor) : undefined;
+            const position = callable ? callable.selectionRange.start : cursor;
+
+            if (callable) {
+                logger.info(`Target symbol: ${callable.name} [${vscode.SymbolKind[callable.kind]}]`);
+            } else {
+                logger.info('Target symbol: (fallback to cursor position)');
+            }
+
+            const items = await LSPService.prepareCallHierarchy(uri, position);
+            if (!items || items.length === 0) {
+                logger.info('No CallHierarchyItem returned. Provider may be unavailable for this language or position.');
+                logger.show();
+                return;
+            }
+
+            const item = items[0];
+            logger.info(`Prepared item: ${item.name} [${vscode.SymbolKind[item.kind]}] at ${item.uri.fsPath}:${item.selectionRange.start.line + 1}`);
+
+            const outgoing = await LSPService.getOutgoingCalls(item) || [];
+            logger.info(`\nOutgoing calls (${outgoing.length}):`);
+            for (const call of outgoing.slice(0, 30)) {
+                logger.info(`  ${item.name} -> ${call.to.name} [${vscode.SymbolKind[call.to.kind]}] ${call.to.uri.fsPath}:${call.to.selectionRange.start.line + 1}`);
+            }
+            if (outgoing.length > 30) {
+                logger.info(`  ... 以及 ${outgoing.length - 30} 条（省略）`);
+            }
+
+            const incoming = await LSPService.getIncomingCalls(item) || [];
+            logger.info(`\nIncoming calls (${incoming.length}):`);
+            for (const call of incoming.slice(0, 30)) {
+                logger.info(`  ${call.from.name} [${vscode.SymbolKind[call.from.kind]}] -> ${item.name} ${call.from.uri.fsPath}:${call.from.selectionRange.start.line + 1}`);
+            }
+            if (incoming.length > 30) {
+                logger.info(`  ... 以及 ${incoming.length - 30} 条（省略）`);
+            }
+
+            logger.info(`========== End ==========\n`);
+            logger.show();
+        } catch (error) {
+            logger.error(`Call hierarchy debug failed: ${error}`);
+            logger.show();
+        }
+    }
+
+    /**
      * 递归收集所有 class、struct 和 interface 符号
      * 用于 Go 语言等支持 interface 和 struct 的语言的诊断
      */
@@ -444,6 +524,31 @@ export class DebugController {
         }
 
         return result;
+    }
+
+    private static _findCallableSymbolAtPosition(symbols: vscode.DocumentSymbol[], pos: vscode.Position): vscode.DocumentSymbol | undefined {
+        for (const symbol of symbols) {
+            if (!symbol.range.contains(pos)) {
+                continue;
+            }
+
+            if (symbol.children && symbol.children.length > 0) {
+                const child = this._findCallableSymbolAtPosition(symbol.children, pos);
+                if (child) {
+                    return child;
+                }
+            }
+
+            if (
+                symbol.kind === vscode.SymbolKind.Function ||
+                symbol.kind === vscode.SymbolKind.Method ||
+                symbol.kind === vscode.SymbolKind.Constructor
+            ) {
+                return symbol;
+            }
+        }
+
+        return undefined;
     }
 
     /**
@@ -585,6 +690,24 @@ export class DebugController {
                     const sourceLabel = source ? `${source.name} [${source.type}]` : '?';
                     const targetLabel = target ? `${target.name} [${target.type}]` : '?';
                     logger.info(`    ${sourceLabel} aggregates ${targetLabel}`);
+                }
+            }
+
+            // 查询 calls 关系（函数/方法调用）
+            logger.info(`\n[9] Querying 'calls' relations:`);
+            const callsData = ViewQueryService.queryGlobalRelation(graph, ['calls'], true);
+            logger.info(`    Nodes: ${callsData.nodes.length}, Edges: ${callsData.edges.length}\n`);
+
+            if (callsData.edges.length === 0) {
+                logger.info(`    (no 'calls' relations found)\n`);
+            } else {
+                const nodeMap = new Map(callsData.nodes.map(n => [n.id, n]));
+                for (const edge of callsData.edges) {
+                    const source = nodeMap.get(edge.sourceId);
+                    const target = nodeMap.get(edge.targetId);
+                    const sourceLabel = source ? `${source.name} [${source.type}]` : '?';
+                    const targetLabel = target ? `${target.name} [${target.type}]` : '?';
+                    logger.info(`    ${sourceLabel} calls ${targetLabel}`);
                 }
             }
 

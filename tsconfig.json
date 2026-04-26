@@ -14,7 +14,8 @@
 		// "noUnusedParameters": true,  /* Report errors on unused parameters. */
 		"types": [
 			"node",
-			"vscode"
+			"vscode",
+			"mocha"
 		],
 	}
 }

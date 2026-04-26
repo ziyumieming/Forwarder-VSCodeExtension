@@ -6,6 +6,7 @@ import { InheritanceExtractor } from '../adapters/InheritanceExtractor';
 import { CompositionExtractor } from '../adapters/CompositionExtractor';
 import { DependencyExtractor } from '../adapters/DependencyExtractor';
 import { AggregationExtractor } from '../adapters/AggregationExtractor';
+import { CallExtractor } from '../adapters/CallExtractor';
 
 import { SymbolRule } from '../models/SymbolRule';
 import { logger } from '../utils/logger';
@@ -112,6 +113,14 @@ export class AdapterService {
         edges.push(...aggregationResult.edges);
         nodes.push(...aggregationResult.placeholderNodes);
 
+        // 6. 函数/方法调用关系抽取（Call Hierarchy）
+        logger.info(`[AdapterService.extractFileSymbols] 开始提取调用关系（函数/方法调用）`);
+        const callResult = await CallExtractor.analyze(document, symbolIndex, uriString);
+        logger.info(`[AdapterService.extractFileSymbols] 调用关系提取完毕: ${callResult.edges.length} 条边, ${callResult.placeholderNodes.length} 个占位符节点`);
+
+        edges.push(...callResult.edges);
+        nodes.push(...callResult.placeholderNodes);
+
         const result: FileSymbolsPayload = {
             uri: uriString,
             nodes,
@@ -149,6 +158,9 @@ export class AdapterService {
                     }
                     // 收录声明头，因为里面包含改变被扫描对象之间横向关系的extends/implements短语
                     str += `${sigText};`;
+                } else if (type === 'function' || type === 'method') {
+                    // 调用图依赖函数体内容；函数体变动必须触发 calls 边重算。
+                    str += `${document.getText(sym.range)};`;
                 }
             }
             if (sym.children && sym.children.length > 0) {

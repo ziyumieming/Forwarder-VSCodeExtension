@@ -2,6 +2,23 @@
 import { IRNode, EdgeData, EdgeRelation, GraphViewData } from '../models/GraphDefinition';
 import { logger } from '../utils/logger';
 
+export type CallGraphDirection = 'incoming' | 'outgoing' | 'both';
+
+export interface FunctionCallGraphOptions {
+    direction?: CallGraphDirection;
+    depth?: number;
+    includeExternal?: boolean;
+    maxNodes?: number;
+    maxEdges?: number;
+}
+
+export interface FunctionCallPathOptions {
+    direction?: CallGraphDirection;
+    includeExternal?: boolean;
+    maxDepth?: number;
+    maxNodes?: number;
+}
+
 
 export class ViewQueryService {
     /**
@@ -111,6 +128,203 @@ export class ViewQueryService {
         return { nodes, edges, centerDetails };
     }
 
+    public static queryFunctionCallGraph(
+        graph: ProjectGraph,
+        nodeId: string,
+        options: FunctionCallGraphOptions = {}
+    ): GraphViewData {
+        const direction = this.normalizeDirection(options.direction, 'both');
+        const depth = this.normalizePositiveInteger(options.depth, 2, 0, 20);
+        const maxNodes = this.normalizePositiveInteger(options.maxNodes, 100, 1, 5000);
+        const maxEdges = this.normalizePositiveInteger(options.maxEdges, 300, 1, 10000);
+        const includeExternal = options.includeExternal === true;
+
+        const visited = new Set<string>([nodeId]);
+        const edgeMap = new Map<string, EdgeData>();
+        const queue: { id: string; depth: number }[] = [{ id: nodeId, depth: 0 }];
+        let truncated = false;
+
+        while (queue.length > 0) {
+            const current = queue.shift()!;
+            if (current.depth >= depth) {
+                continue;
+            }
+
+            const nextEdges = this.getCallEdgesForDirection(graph, current.id, direction);
+            for (const edge of nextEdges) {
+                const source = graph.getNode(edge.sourceId);
+                const target = graph.getNode(edge.targetId);
+                if (!source || !target) {
+                    continue;
+                }
+
+                if (!includeExternal && (source.isLibrary || target.isLibrary) && edge.sourceId !== nodeId && edge.targetId !== nodeId) {
+                    continue;
+                }
+
+                const edgeKey = this.getEdgeKey(edge);
+                if (!edgeMap.has(edgeKey)) {
+                    if (edgeMap.size >= maxEdges) {
+                        truncated = true;
+                        continue;
+                    }
+                    edgeMap.set(edgeKey, edge);
+                }
+
+                const nextNodeId = edge.sourceId === current.id ? edge.targetId : edge.sourceId;
+                if (!visited.has(nextNodeId)) {
+                    if (visited.size >= maxNodes) {
+                        truncated = true;
+                        continue;
+                    }
+
+                    visited.add(nextNodeId);
+                    queue.push({ id: nextNodeId, depth: current.depth + 1 });
+                }
+            }
+        }
+
+        const nodes = this.filterNodesForExternal(graph.getNodes(visited), nodeId, includeExternal);
+        const validNodeIds = new Set(nodes.map(n => n.id));
+        const edges = Array.from(edgeMap.values()).filter(e => validNodeIds.has(e.sourceId) && validNodeIds.has(e.targetId));
+
+        return {
+            nodes,
+            edges,
+            meta: {
+                truncated,
+                depth,
+                direction
+            }
+        };
+    }
+
+    public static queryFunctionCallPath(
+        graph: ProjectGraph,
+        sourceId: string,
+        targetId: string,
+        options: FunctionCallPathOptions = {}
+    ): GraphViewData {
+        const direction = this.normalizeDirection(options.direction, 'outgoing');
+        const maxDepth = this.normalizePositiveInteger(options.maxDepth, 8, 0, 50);
+        const maxNodes = this.normalizePositiveInteger(options.maxNodes, 1000, 1, 10000);
+        const includeExternal = options.includeExternal === true;
+
+        const sourceNode = graph.getNode(sourceId);
+        const targetNode = graph.getNode(targetId);
+        if (!sourceNode || !targetNode) {
+            return {
+                nodes: graph.getNodes([sourceId, targetId]),
+                edges: [],
+                meta: {
+                    pathFound: false,
+                    direction,
+                    depth: maxDepth,
+                    reason: 'missing-endpoint'
+                }
+            };
+        }
+
+        if (sourceId === targetId) {
+            return {
+                nodes: [sourceNode],
+                edges: [],
+                meta: {
+                    pathFound: true,
+                    direction,
+                    depth: 0
+                }
+            };
+        }
+
+        const visited = new Set<string>([sourceId]);
+        const queue: { id: string; depth: number }[] = [{ id: sourceId, depth: 0 }];
+        const predecessor = new Map<string, { previousId: string; edge: EdgeData }>();
+        let truncated = false;
+        let found = false;
+
+        while (queue.length > 0 && !found) {
+            const current = queue.shift()!;
+            if (current.depth >= maxDepth) {
+                continue;
+            }
+
+            const nextEdges = this.getCallEdgesForDirection(graph, current.id, direction);
+            for (const edge of nextEdges) {
+                const nextNodeId = edge.sourceId === current.id ? edge.targetId : edge.sourceId;
+                const nextNode = graph.getNode(nextNodeId);
+                if (!nextNode) {
+                    continue;
+                }
+
+                if (!includeExternal && nextNode.isLibrary && nextNodeId !== targetId) {
+                    continue;
+                }
+
+                if (visited.has(nextNodeId)) {
+                    continue;
+                }
+
+                if (visited.size >= maxNodes) {
+                    truncated = true;
+                    continue;
+                }
+
+                visited.add(nextNodeId);
+                predecessor.set(nextNodeId, { previousId: current.id, edge });
+
+                if (nextNodeId === targetId) {
+                    found = true;
+                    break;
+                }
+
+                queue.push({ id: nextNodeId, depth: current.depth + 1 });
+            }
+        }
+
+        if (!found) {
+            const nodes = this.filterNodesForExternal(graph.getNodes([sourceId, targetId]), sourceId, includeExternal);
+            return {
+                nodes,
+                edges: [],
+                meta: {
+                    pathFound: false,
+                    truncated,
+                    direction,
+                    depth: maxDepth
+                }
+            };
+        }
+
+        const pathNodeIds = new Set<string>([targetId]);
+        const pathEdges: EdgeData[] = [];
+        let cursor = targetId;
+        while (cursor !== sourceId) {
+            const step = predecessor.get(cursor);
+            if (!step) {
+                break;
+            }
+            pathEdges.unshift(step.edge);
+            pathNodeIds.add(step.previousId);
+            cursor = step.previousId;
+        }
+
+        const nodes = this.filterNodesForExternal(graph.getNodes(pathNodeIds), sourceId, includeExternal);
+        const validNodeIds = new Set(nodes.map(n => n.id));
+        const edges = pathEdges.filter(e => validNodeIds.has(e.sourceId) && validNodeIds.has(e.targetId));
+
+        return {
+            nodes,
+            edges,
+            meta: {
+                pathFound: true,
+                truncated,
+                direction,
+                depth: edges.length
+            }
+        };
+    }
+
     /**
      * 检验提取出的 Nodes 中是否完整的包含了 Edges 的源/目标端点。如果缺失则输出警告。
      */
@@ -132,5 +346,64 @@ export class ViewQueryService {
         if (hangingEdgesCount > 0) {
             logger.warn(`[ViewQueryService] ${contextTag} 发现 ${hangingEdgesCount} 条悬空边（缺少源或目标节点）`);
         }
+    }
+
+    private static getCallEdgesForDirection(graph: ProjectGraph, nodeId: string, direction: CallGraphDirection): EdgeData[] {
+        if (direction === 'outgoing') {
+            return this.getOutgoingCallEdges(graph, nodeId);
+        }
+
+        if (direction === 'incoming') {
+            return this.getIncomingCallEdges(graph, nodeId);
+        }
+
+        return [...this.getOutgoingCallEdges(graph, nodeId), ...this.getIncomingCallEdges(graph, nodeId)];
+    }
+
+    private static getOutgoingCallEdges(graph: ProjectGraph, nodeId: string): EdgeData[] {
+        const targets = graph.outEdges.get(nodeId)?.get('calls');
+        if (!targets) {
+            return [];
+        }
+
+        return Array.from(targets).map(targetId => ({ sourceId: nodeId, targetId, relation: 'calls' }));
+    }
+
+    private static getIncomingCallEdges(graph: ProjectGraph, nodeId: string): EdgeData[] {
+        const sources = graph.inEdges.get(nodeId)?.get('calls');
+        if (!sources) {
+            return [];
+        }
+
+        return Array.from(sources).map(sourceId => ({ sourceId, targetId: nodeId, relation: 'calls' }));
+    }
+
+    private static filterNodesForExternal(nodes: IRNode[], centerNodeId: string, includeExternal: boolean): IRNode[] {
+        if (includeExternal) {
+            return nodes;
+        }
+
+        return nodes.filter(node => !node.isLibrary || node.id === centerNodeId);
+    }
+
+    private static getEdgeKey(edge: EdgeData): string {
+        return `${edge.sourceId}->${edge.targetId}#${edge.relation}`;
+    }
+
+    private static normalizeDirection(value: unknown, fallback: CallGraphDirection): CallGraphDirection {
+        if (value === 'incoming' || value === 'outgoing' || value === 'both') {
+            return value;
+        }
+
+        return fallback;
+    }
+
+    private static normalizePositiveInteger(value: unknown, fallback: number, min: number, max: number): number {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) {
+            return fallback;
+        }
+
+        return Math.min(max, Math.max(min, Math.floor(parsed)));
     }
 }

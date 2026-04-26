@@ -52,6 +52,47 @@ export class AnalysisController {
                 break;
             }
 
+            case 'queryFunctionCallGraph': {
+                logger.info(`[AnalysisController] 响应函数调用图查询: nodeId=${data.nodeId}, direction=${data.direction}, depth=${data.depth}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                const result = await this.runtime.queryFunctionCallGraph(
+                    data.nodeId,
+                    data.direction,
+                    data.depth,
+                    data.includeExternal,
+                    data.maxNodes,
+                    data.maxEdges
+                );
+
+                this.provider.postMessage({
+                    command: 'renderGraphData',
+                    data: result,
+                    __queryId: data.__queryId,
+                    __queryMode: data.__queryMode,
+                    __querySignature: data.__querySignature
+                });
+                break;
+            }
+
+            case 'queryFunctionCallPath': {
+                logger.info(`[AnalysisController] 响应函数调用链查询: sourceId=${data.sourceId}, targetId=${data.targetId}, direction=${data.direction}, maxDepth=${data.maxDepth}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                const result = await this.runtime.queryFunctionCallPath(
+                    data.sourceId,
+                    data.targetId,
+                    data.direction,
+                    data.maxDepth,
+                    data.includeExternal
+                );
+
+                this.provider.postMessage({
+                    command: 'renderGraphData',
+                    data: result,
+                    __queryId: data.__queryId,
+                    __queryMode: data.__queryMode,
+                    __querySignature: data.__querySignature
+                });
+                break;
+            }
+
             default:
                 logger.info(`[AnalysisController] 未知的前端指令: ${data.command}`);
                 break;
