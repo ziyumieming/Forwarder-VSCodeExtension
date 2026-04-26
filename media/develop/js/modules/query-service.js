@@ -22,11 +22,19 @@
         }
 
         if (command === 'queryNodeDependencies') {
-            return 'node';
+            return 'relation-node';
         }
 
         if (command === 'queryGlobalRelation') {
-            return 'global';
+            return 'relation-global';
+        }
+
+        if (command === 'queryFunctionCallGraph') {
+            return 'call-graph';
+        }
+
+        if (command === 'queryFunctionCallPath') {
+            return 'call-path';
         }
 
         return 'unknown';

@@ -17,16 +17,25 @@ Forwarder is a VS Code extension for code-structure analysis and interactive gra
 
 The Webview relation filter exposes Aggregates as a default-enabled option alongside Extends, Implements, Composes, and Dependencies.
 
-## Frontend Architecture (After Refactor)
+## Frontend Architecture (Tab Shell Refactor)
 
-The Webview frontend keeps non-ESM script loading and uses a thin orchestration layer in main.js.
+The Webview frontend keeps non-ESM script loading and now uses a tab shell around one shared Cytoscape canvas.
+`main.js` owns bootstrap and shared rendering services; tab-specific behavior lives in tab modules.
+
+### View Model
+
+- `relationGraph`: the current class/relation graph. It owns relation queries, node dependency queries, center-card behavior, and graph interaction replay.
+- `callGraph`: placeholder tab for the upcoming function call graph page. It shares the same canvas and global selection store but has no feature UI yet.
+- Both tabs reuse the same `#cy` Cytoscape instance. Switching tabs changes toolbar visibility and active controller, not the canvas element.
 
 ### Script Load Order
 
 1. cytoscape library scripts
 2. base scripts: style.js -> event.js -> ui.js
-3. modules scripts under media/develop/js/modules
-4. main.js orchestration
+3. shared state modules: center-state.js -> tab-manager.js -> selection-store.js
+4. query/render/layout/card modules under media/develop/js/modules
+5. tab modules such as relation-graph-tab.js
+6. main.js bootstrap
 
 The injection mapping is defined in src/providers/AnalysisView.ts and consumed by media/develop/html/view.html.
 
@@ -36,12 +45,34 @@ The injection mapping is defined in src/providers/AnalysisView.ts and consumed b
 - modules/plugin-manager.js: html-node plugin detection and dynamic load
 - modules/card-markup.js: class-card HTML builders
 - modules/center-state.js: center-node state + version tracking
+- modules/tab-manager.js: tab registration, activation, toolbar visibility, active tab lifecycle
+- modules/selection-store.js: cross-tab selected function id store
 - modules/query-service.js: query send/remember/pending response consume
 - modules/graph-incremental.js: snapshot, diff, incremental apply + fallback
+- modules/graph-pipeline.js: backend graph data -> Cytoscape elements, with `presentationMode` support
 - modules/card-events.js: delegated card interaction events with idempotent bind/unbind
 - modules/card-render.js: card render orchestration
 - modules/viewport-animation.js: center viewport lock/animate helpers
-- main.js: flow composition, message dispatch, and lifecycle orchestration
+- modules/relation-graph-tab.js: relation graph queries, node interactions, replay, and stale node-response checks
+- main.js: bootstrap, dependency wiring, shared render pipeline, backend message dispatch
+
+### Request Modes
+
+`query-service.js` tracks pending/latest responses by explicit request mode:
+
+- `relation-global`: relation graph global query
+- `relation-node`: relation graph node dependency query
+- `call-graph`: reserved for function call graph query
+- `call-path`: reserved for function call path query
+
+Tab code should pass `meta.requestMode` explicitly when sending queries.
+
+### Graph Presentation Modes
+
+`GraphPipeline.normalizeGraphData` supports presentation options:
+
+- `class-card`: current relation graph behavior with center class-card data.
+- `simple-node`: reserved for future call graph rendering without class-card data.
 
 ## Consistency Guardrails
 

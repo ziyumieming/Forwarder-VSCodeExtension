@@ -101,7 +101,7 @@
                 return false;
             };
 
-        if (!cy || !currentCenterNodeId || lastRequestMode !== 'node') {
+        if (!cy || !currentCenterNodeId || (lastRequestMode !== 'node' && lastRequestMode !== 'relation-node')) {
             return false;
         }
 

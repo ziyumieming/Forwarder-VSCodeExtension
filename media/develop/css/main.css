@@ -44,7 +44,7 @@ body {
     right: 12px;
     min-height: 52px;
     display: grid;
-    grid-template-columns: auto auto auto 1fr auto;
+    grid-template-columns: auto auto auto auto 1fr auto;
     align-items: center;
     gap: 14px;
     padding: 0 14px;
@@ -323,4 +323,50 @@ body {
         width: min(calc(var(--analysis-card-item-width) + 16px), 86vw);
         max-height: min(360px, 56vh);
     }
+}
+
+.tab-strip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid var(--stroke);
+    border-radius: 10px;
+    background: rgba(10, 26, 41, 0.45);
+}
+
+.tab-btn {
+    border: 0;
+    color: var(--text-sub);
+    background: transparent;
+    border-radius: 7px;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.tab-btn:hover {
+    color: var(--text-main);
+    background: rgba(23, 44, 64, 0.72);
+}
+
+.tab-btn.is-active {
+    color: #1d1403;
+    background: var(--accent);
+    font-weight: 600;
+}
+
+.tab-toolbar {
+    display: contents;
+}
+
+.tab-toolbar[hidden] {
+    display: none;
+}
+
+.option-note {
+    font-size: 12px;
+    color: var(--text-sub);
+    white-space: nowrap;
 }

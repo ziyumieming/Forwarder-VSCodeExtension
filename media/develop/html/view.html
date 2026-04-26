@@ -18,43 +18,57 @@
             <span class="brand-dot"></span>
             <span class="brand">Forwarder Analysis</span>
         </div>
-        <div class="query-options relation-options" aria-label="Relation Options">
-            <span class="option-title">Relations</span>
-            <label class="option-item" for="rel-extends">
-                <input id="rel-extends" type="checkbox" checked />
-                <span>Extends</span>
-            </label>
-            <label class="option-item" for="rel-implements">
-                <input id="rel-implements" type="checkbox" checked />
-                <span>Implements</span>
-            </label>
-            <label class="option-item" for="rel-composition">
-                <input id="rel-composes" type="checkbox" checked />
-                <span>Composes</span>
-            </label>
-            <label class="option-item" for="rel-dependency">
-                <input id="rel-dependency" type="checkbox" checked />
-                <span>Dependencies</span>
-            </label>
-            <label class="option-item" for="rel-aggregates">
-                <input id="rel-aggregates" type="checkbox" checked />
-                <span>Aggregates</span>
-            </label>
+        <div class="tab-strip" role="tablist" aria-label="Analysis Views">
+            <button class="tab-btn is-active" type="button" role="tab" aria-selected="true"
+                data-analysis-tab="relationGraph">Class Graph</button>
+            <button class="tab-btn" type="button" role="tab" aria-selected="false" tabindex="-1"
+                data-analysis-tab="callGraph">Call Graph</button>
         </div>
-        <div class="query-options scope-options" aria-label="Workspace Scope Options">
-            <span class="option-title">Scope</span>
-            <label class="option-item" for="include-external">
-                <input id="include-external" type="checkbox" />
-                <span>Include External Files</span>
-            </label>
+        <div class="tab-toolbar is-active" data-tab-toolbar="relationGraph">
+            <div class="query-options relation-options" aria-label="Relation Options">
+                <span class="option-title">Relations</span>
+                <label class="option-item" for="rel-extends">
+                    <input id="rel-extends" type="checkbox" checked />
+                    <span>Extends</span>
+                </label>
+                <label class="option-item" for="rel-implements">
+                    <input id="rel-implements" type="checkbox" checked />
+                    <span>Implements</span>
+                </label>
+                <label class="option-item" for="rel-composition">
+                    <input id="rel-composes" type="checkbox" checked />
+                    <span>Composes</span>
+                </label>
+                <label class="option-item" for="rel-dependency">
+                    <input id="rel-dependency" type="checkbox" checked />
+                    <span>Dependencies</span>
+                </label>
+                <label class="option-item" for="rel-aggregates">
+                    <input id="rel-aggregates" type="checkbox" checked />
+                    <span>Aggregates</span>
+                </label>
+            </div>
+            <div class="query-options scope-options" aria-label="Workspace Scope Options">
+                <span class="option-title">Scope</span>
+                <label class="option-item" for="include-external">
+                    <input id="include-external" type="checkbox" />
+                    <span>Include External Files</span>
+                </label>
+            </div>
+            <div class="center controls">
+                <button id="btn-fit" class="nav-btn">Fit</button>
+                <button id="btn-layout" class="nav-btn">Layout</button>
+                <button id="btn-reset" class="nav-btn">Reset</button>
+            </div>
+            <div class="right controls">
+                <button id="btn-query" class="nav-btn nav-btn-primary">Query</button>
+            </div>
         </div>
-        <div class="center controls">
-            <button id="btn-fit" class="nav-btn">Fit</button>
-            <button id="btn-layout" class="nav-btn">Layout</button>
-            <button id="btn-reset" class="nav-btn">Reset</button>
-        </div>
-        <div class="right controls">
-            <button id="btn-query" class="nav-btn nav-btn-primary">Query</button>
+        <div class="tab-toolbar call-graph-toolbar" data-tab-toolbar="callGraph" hidden>
+            <div class="query-options call-graph-placeholder" aria-label="Call Graph Options">
+                <span class="option-title">Call Graph</span>
+                <span class="option-note">Coming next</span>
+            </div>
         </div>
     </nav>
 
@@ -71,6 +85,8 @@
     <script nonce="{{nonce}}" src="{{modulePluginManagerScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleCardMarkupScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleCenterStateScriptUri}}"></script>
+    <script nonce="{{nonce}}" src="{{moduleTabManagerScriptUri}}"></script>
+    <script nonce="{{nonce}}" src="{{moduleSelectionStoreScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleQueryServiceScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleGraphIncrementalScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleGraphPipelineScriptUri}}"></script>
@@ -80,6 +96,7 @@
     <script nonce="{{nonce}}" src="{{moduleViewportAnimationScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleGraphFocusScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleCenterPresentationScriptUri}}"></script>
+    <script nonce="{{nonce}}" src="{{moduleRelationGraphTabScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{mainScriptUri}}"></script>
 </body>
 

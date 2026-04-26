@@ -260,6 +260,8 @@
         });
 
         var state = safeOptions.state || {};
+        var presentationMode = safeOptions.presentationMode || safeOptions.viewMode || 'class-card';
+        var classCardPresentationEnabled = presentationMode !== 'simple-node';
         var currentCenterNodeId = state.currentCenterNodeId ? String(state.currentCenterNodeId) : null;
         var centerCardEnabled = !!state.centerCardEnabled;
         var htmlNodePluginReady = !!state.htmlNodePluginReady;
@@ -304,7 +306,9 @@
             ? safeOptions.setPendingCenterDetailsNodeId
             : function () { };
 
-        var incomingCenterDetails = readClassCardFromCenterDetails(graphData.centerDetails);
+        var incomingCenterDetails = classCardPresentationEnabled
+            ? readClassCardFromCenterDetails(graphData.centerDetails)
+            : null;
         if (incomingCenterDetails && centerDetailsCache instanceof Map) {
             centerDetailsCache.set(incomingCenterDetails.nodeId, incomingCenterDetails);
 
@@ -330,18 +334,22 @@
             .map(function (node) {
                 var id = String(node.id);
                 var baseLabel = getNodeDisplayLabel(node);
-                var classCard = resolveClassCardForNode(node, incomingCenterDetails, {
-                    centerDetailsCache: centerDetailsCache,
-                    pendingCenterDetailsNodeId: pendingCenterDetailsNodeId
-                });
-                var classCardLabel = buildClassCardLabel(classCard, {
-                    getClassCardOptions: getClassCardOptions
-                });
-                var isCenterClassCard = !!currentCenterNodeId && centerCardEnabled && currentCenterNodeId === id;
+                var classCard = classCardPresentationEnabled
+                    ? resolveClassCardForNode(node, incomingCenterDetails, {
+                        centerDetailsCache: centerDetailsCache,
+                        pendingCenterDetailsNodeId: pendingCenterDetailsNodeId
+                    })
+                    : null;
+                var classCardLabel = classCardPresentationEnabled
+                    ? buildClassCardLabel(classCard, {
+                        getClassCardOptions: getClassCardOptions
+                    })
+                    : '';
+                var isCenterClassCard = classCardPresentationEnabled && !!currentCenterNodeId && centerCardEnabled && currentCenterNodeId === id;
                 var useHtmlCard = isCenterClassCard && htmlNodePluginReady;
-                var cardSize = estimateCardSize(classCard);
+                var cardSize = classCardPresentationEnabled ? estimateCardSize(classCard) : { width: 0, height: 0 };
 
-                if (classCardModelCache instanceof Map) {
+                if (classCardPresentationEnabled && classCardModelCache instanceof Map) {
                     classCardModelCache.set(id, classCard);
                 }
 

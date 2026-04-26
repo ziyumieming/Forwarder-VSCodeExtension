@@ -169,7 +169,7 @@
             : noop;
         var log = typeof safeOptions.log === 'function' ? safeOptions.log : noop;
 
-        if (!cy || lastRequestMode !== 'node') {
+        if (!cy || (lastRequestMode !== 'node' && lastRequestMode !== 'relation-node')) {
             return false;
         }
 

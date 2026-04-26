@@ -5,12 +5,10 @@
     const centerDetailsCache = new Map();
     const classCardModelCache = new Map();
     let htmlNodePluginReady = false;
-    let lastRequestMode = 'global';
+    let lastRequestMode = 'relation-global';
     let lastCenterNodeId = null;
     let centerCardEnabled = false;
     const collapsedCardSections = new Set();
-    let suppressNodeTapNodeId = null;
-    let suppressNodeTapUntil = 0;
     let pendingGlobalToNodeTransition = null;
     const CENTER_LOCK_ZOOM = 1;
     const CENTER_OVERVIEW_ZOOM = 0.5;
@@ -36,12 +34,16 @@
     const cardEventsModule = window.AnalysisModules?.CardEvents;
     const viewportAnimationModule = window.AnalysisModules?.ViewportAnimation;
     const centerStateModule = window.AnalysisModules?.CenterState;
+    const tabManagerModule = window.AnalysisModules?.TabManager;
+    const selectionStoreModule = window.AnalysisModules?.SelectionStore;
     const queryServiceModule = window.AnalysisModules?.QueryService;
     const graphIncrementalModule = window.AnalysisModules?.GraphIncremental;
     const graphPipelineModule = window.AnalysisModules?.GraphPipeline;
     const layoutManagerModule = window.AnalysisModules?.LayoutManager;
     const graphFocusModule = window.AnalysisModules?.GraphFocus;
     const centerPresentationModule = window.AnalysisModules?.CenterPresentation;
+    const relationGraphTabModule = window.AnalysisModules?.RelationGraphTab;
+    let relationGraphTab = null;
 
     if (graphIncrementalModule && typeof graphIncrementalModule.createEmptyGraphSnapshot === 'function') {
         latestGraphSnapshot = graphIncrementalModule.createEmptyGraphSnapshot();
@@ -173,81 +175,6 @@
             command,
             ...payload
         });
-    }
-
-    function replayLastQuery(source) {
-        const rememberedQuery = queryServiceModule && typeof queryServiceModule.getLastQueryRequest === 'function'
-            ? queryServiceModule.getLastQueryRequest()
-            : null;
-
-        if (!rememberedQuery) {
-            log('query', 'info', 'replay last query fallback to global', { source });
-            requestGlobalRelation(source);
-            return;
-        }
-
-        log('query', 'info', 'replay last query', {
-            source,
-            lastCommand: rememberedQuery.command,
-            lastPayload: rememberedQuery.payload,
-            lastSource: rememberedQuery.source
-        });
-
-        if (rememberedQuery.command === 'queryNodeDependencies') {
-            const replayNodeId = String(
-                rememberedQuery.payload?.nodeId || currentCenterNodeId || pendingCenterDetailsNodeId || ''
-            );
-
-            if (!replayNodeId) {
-                requestGlobalRelation(`${source}:node-replay-fallback`);
-                return;
-            }
-
-            centerCardEnabled = false;
-            if (centerStateModule && typeof centerStateModule.setCenterCardEnabled === 'function') {
-                centerStateModule.setCenterCardEnabled(centerCardEnabled);
-            }
-            if (centerPresentationModule && typeof centerPresentationModule.applyCenterCardPresentation === 'function') {
-                centerPresentationModule.applyCenterCardPresentation({
-                    cy,
-                    currentCenterNodeId,
-                    lastCenterNodeId,
-                    centerCardEnabled,
-                    htmlNodePluginReady,
-                    log,
-                    renderHtmlNodeCards,
-                    clearNodeBypassSize: (node) => {
-                        centerPresentationModule.clearNodeBypassSize({ node, log, debugWarn });
-                    }
-                });
-            }
-            if (graphFocusModule && typeof graphFocusModule.resetFocus === 'function') {
-                graphFocusModule.resetFocus(cy);
-            } else {
-                cy.elements().removeClass('faded focus');
-                cy.fit(undefined, 70);
-            }
-
-            requestNodeDependencies(replayNodeId, source, {
-                payloadOverride: {
-                    ...rememberedQuery.payload,
-                    nodeId: replayNodeId
-                },
-                enableCenterCard: false,
-                setAsCenterNode: true
-            });
-            return;
-        }
-
-        requestGlobalRelation(source, {
-            payloadOverride: { ...rememberedQuery.payload }
-        });
-        if (graphFocusModule && typeof graphFocusModule.resetFocus === 'function') {
-            graphFocusModule.resetFocus(cy);
-        } else {
-            cy.elements().removeClass('faded focus');
-            cy.fit(undefined, 70);
-        }
     }
 
     const lockCenterNodeViewport = (reason, options = {}) => {
@@ -460,13 +387,9 @@
                 log('state', 'verbose', `ignore ${target} click after drag`, {});
             },
             onHeaderAction: (nodeId) => {
-                suppressNodeTapNodeId = String(nodeId);
-                suppressNodeTapUntil = Date.now() + 300;
-
-                requestNodeDependencies(nodeId, 'card-header-refresh', {
-                    enableCenterCard: true,
-                    setAsCenterNode: true
-                });
+                if (relationGraphTab && typeof relationGraphTab.onHeaderAction === 'function') {
+                    relationGraphTab.onHeaderAction(nodeId);
+                }
             },
             onSectionToggle: (sectionToggle) => {
                 const sectionName = sectionToggle.dataset.cardSection;
@@ -568,6 +491,7 @@
                     htmlNodePluginReady,
                     pendingCenterDetailsNodeId
                 },
+                presentationMode: 'class-card',
                 centerDetailsCache,
                 classCardModelCache,
                 getClassCardOptions,
@@ -600,7 +524,7 @@
 
         const { elements, snapshot } = normalized;
         const isGlobalToNodeTransition = !!pendingGlobalToNodeTransition
-            && lastRequestMode === 'node'
+            && lastRequestMode === 'relation-node'
             && !!currentCenterNodeId
             && pendingGlobalToNodeTransition.centerNodeId === String(currentCenterNodeId);
 
@@ -613,7 +537,7 @@
         });
 
         let incrementalResult = null;
-        if (lastRequestMode === 'node') {
+        if (lastRequestMode === 'relation-node') {
             if (graphIncrementalModule && typeof graphIncrementalModule.applyIncremental === 'function') {
                 incrementalResult = graphIncrementalModule.applyIncremental({
                     previousSnapshot: latestGraphSnapshot,
@@ -641,7 +565,7 @@
             latestGraphSnapshot = snapshot;
         }
 
-        if (lastRequestMode === 'global') {
+        if (lastRequestMode === 'relation-global') {
             setCenterNode(null, 'render:global');
             pendingCenterDetailsNodeId = null;
             if (centerStateModule && typeof centerStateModule.setPendingCenterDetailsNodeId === 'function') {
@@ -691,11 +615,11 @@
         };
 
         const shouldRunLayout =
-            lastRequestMode !== 'node'
+            lastRequestMode !== 'relation-node'
             || !incrementalResult
             || incrementalResult.structuralChange;
 
-        if (lastRequestMode === 'node') {
+        if (lastRequestMode === 'relation-node') {
             const nodeModeLayoutOptions = layoutManagerModule && typeof layoutManagerModule.getNodeModeLayoutOptions === 'function'
                 ? layoutManagerModule.getNodeModeLayoutOptions({
                     fit: false,
@@ -736,7 +660,7 @@
             return;
         }
 
-        if (lastRequestMode === 'global') {
+        if (lastRequestMode === 'relation-global') {
             const usedGlobalSmoothLayout = layoutManagerModule
                 && typeof layoutManagerModule.runGlobalSmoothLayout === 'function'
                 && layoutManagerModule.runGlobalSmoothLayout({
@@ -752,7 +676,7 @@
             }
         }
 
-        if (lastRequestMode === 'node' && incrementalResult?.mode === 'incremental') {
+        if (lastRequestMode === 'relation-node' && incrementalResult?.mode === 'incremental') {
             const usedStagger = layoutManagerModule
                 && typeof layoutManagerModule.runNodeStaggerEnterLayout === 'function'
                 && layoutManagerModule.runNodeStaggerEnterLayout({
@@ -832,306 +756,68 @@
     }
 
     function requestGlobalRelation(source = 'toolbar-button', options = {}) {
-        const queryOptions = options.queryOptionsOverride || window.AnalysisUI.getQueryOptions();
-        const payload = options.payloadOverride || {
-            relations: queryOptions.relations,
-            includeExternal: queryOptions.includeExternal
-        };
-
-        pendingGlobalToNodeTransition = null;
-        clearGlobalToNodeTransitionMask('requestGlobalRelation');
-
-        lastRequestMode = 'global';
-        centerCardEnabled = false;
-        if (centerStateModule && typeof centerStateModule.setCenterCardEnabled === 'function') {
-            centerStateModule.setCenterCardEnabled(centerCardEnabled);
-        }
-        if (queryServiceModule && typeof queryServiceModule.rememberLastQuery === 'function') {
-            queryServiceModule.rememberLastQuery('queryGlobalRelation', payload, source, log);
-        }
-
-        log('query', 'info', 'request global relation', {
-            source,
-            queryOptions,
-            payload
-        });
-        if (queryServiceModule && typeof queryServiceModule.sendQuery === 'function') {
-            queryServiceModule.sendQuery({
-                command: 'queryGlobalRelation',
-                payload,
-                meta: {
-                    requestMode: 'global'
-                },
-                debounceWindowMs: getQueryDebounceWindowMs(),
-                duplicateWindowMs: getQueryDuplicateWindowMs(),
-                log,
-                postMessage: (message) => {
-                    vscode.postMessage(message);
-                }
-            });
-        }
-
-        // 发送查询后再做本地状态复位，避免复位异常阻断通信。
-        if (centerPresentationModule && typeof centerPresentationModule.clearCenterCardState === 'function') {
-            centerPresentationModule.clearCenterCardState({
-                reason: 'global-query',
-                refreshCards: false,
-                cy,
-                log,
-                setCenterNode,
-                setPendingCenterDetailsNodeId: (nodeId) => {
-                    pendingCenterDetailsNodeId = nodeId ? String(nodeId) : null;
-                    if (centerStateModule && typeof centerStateModule.setPendingCenterDetailsNodeId === 'function') {
-                        centerStateModule.setPendingCenterDetailsNodeId(pendingCenterDetailsNodeId);
-                    }
-                },
-                renderHtmlNodeCards,
-                clearNodeBypassSize: (node) => {
-                    centerPresentationModule.clearNodeBypassSize({ node, log, debugWarn });
-                }
-            });
+        if (relationGraphTab && typeof relationGraphTab.requestGlobalRelation === 'function') {
+            relationGraphTab.requestGlobalRelation(source, options);
         }
     }
 
     function requestNodeDependencies(nodeId, source = 'node-tap', options = {}) {
-        const queryOptions = options.queryOptionsOverride || window.AnalysisUI.getQueryOptions();
-        const normalizedNodeId = String(nodeId);
-        const payload = options.payloadOverride || {
-            nodeId: normalizedNodeId,
-            allowedRelations: queryOptions.relations,
-            includeExternal: queryOptions.includeExternal
-        };
-
-        lastRequestMode = 'node';
-        pendingCenterDetailsNodeId = String(payload.nodeId || normalizedNodeId);
-        if (centerStateModule && typeof centerStateModule.setPendingCenterDetailsNodeId === 'function') {
-            centerStateModule.setPendingCenterDetailsNodeId(pendingCenterDetailsNodeId);
-        }
-
-        centerCardEnabled = options.enableCenterCard === true;
-        if (centerStateModule && typeof centerStateModule.setCenterCardEnabled === 'function') {
-            centerStateModule.setCenterCardEnabled(centerCardEnabled);
-        }
-
-        if (options.setAsCenterNode !== false) {
-            setCenterNode(payload.nodeId || normalizedNodeId, `request-node:${source}`);
-        }
-
-        const centerStateVersion = centerStateModule && typeof centerStateModule.getCenterVersion === 'function'
-            ? centerStateModule.getCenterVersion()
-            : 0;
-
-        if (queryServiceModule && typeof queryServiceModule.rememberLastQuery === 'function') {
-            queryServiceModule.rememberLastQuery('queryNodeDependencies', payload, source, log);
-        }
-
-        log('query', 'info', 'request node dependencies', {
-            source,
-            nodeId: payload.nodeId || normalizedNodeId,
-            queryOptions,
-            centerStateVersion,
-            pendingCenterDetailsNodeId,
-            centerCardEnabled,
-            payload
-        });
-
-        if (queryServiceModule && typeof queryServiceModule.sendQuery === 'function') {
-            queryServiceModule.sendQuery({
-                command: 'queryNodeDependencies',
-                payload,
-                meta: {
-                    requestMode: 'node',
-                    centerStateVersion,
-                    centerNodeId: String(payload.nodeId || normalizedNodeId)
-                },
-                debounceWindowMs: getQueryDebounceWindowMs(),
-                duplicateWindowMs: getQueryDuplicateWindowMs(),
-                log,
-                postMessage: (message) => {
-                    vscode.postMessage(message);
-                }
-            });
+        if (relationGraphTab && typeof relationGraphTab.requestNodeDependencies === 'function') {
+            relationGraphTab.requestNodeDependencies(nodeId, source, options);
         }
     }
 
-    window.AnalysisGraphEvents.register(cy, {
-        onNodeTap: (node) => {
-            const tappedNodeId = String(node.id());
+    if (relationGraphTabModule && typeof relationGraphTabModule.create === 'function') {
+        relationGraphTab = relationGraphTabModule.create({
+            cy,
+            queryService: queryServiceModule,
+            graphFocus: graphFocusModule,
+            centerPresentation: centerPresentationModule,
+            centerState: centerStateModule,
+            graphEvents: window.AnalysisGraphEvents,
+            ui: window.AnalysisUI,
+            log,
+            postMessage: (message) => vscode.postMessage(message),
+            getQueryOptions: () => window.AnalysisUI.getQueryOptions(),
+            setLastRequestMode: (mode) => { lastRequestMode = mode; },
+            getLastRequestMode: () => lastRequestMode,
+            getCurrentCenterNodeId: () => currentCenterNodeId,
+            getLastCenterNodeId: () => lastCenterNodeId,
+            setCenterNode,
+            getCenterCardEnabled: () => centerCardEnabled,
+            setCenterCardEnabled: (enabled) => { centerCardEnabled = !!enabled; },
+            getPendingCenterDetailsNodeId: () => pendingCenterDetailsNodeId,
+            setPendingCenterDetailsNodeId: (nodeId) => {
+                pendingCenterDetailsNodeId = nodeId ? String(nodeId) : null;
+                if (centerStateModule && typeof centerStateModule.setPendingCenterDetailsNodeId === 'function') {
+                    centerStateModule.setPendingCenterDetailsNodeId(pendingCenterDetailsNodeId);
+                }
+            },
+            getHtmlNodePluginReady: () => htmlNodePluginReady,
+            getCenterDetailsCache: () => centerDetailsCache,
+            renderHtmlNodeCards,
+            clearNodeBypassSize: (nodeRef) => {
+                if (centerPresentationModule && typeof centerPresentationModule.clearNodeBypassSize === 'function') {
+                    centerPresentationModule.clearNodeBypassSize({ node: nodeRef, log, debugWarn });
+                }
+            },
+            clearGlobalToNodeTransitionMask,
+            applyGlobalToNodeTransitionMask,
+            panCenterNodeToViewport,
+            setPendingGlobalToNodeTransition: (transition) => {
+                pendingGlobalToNodeTransition = transition;
+            },
+            getQueryDebounceWindowMs,
+            getQueryDuplicateWindowMs,
+            animateCenterNodeViewport,
+            lockCenterNodeViewport,
+            centerLockZoom: CENTER_LOCK_ZOOM,
+            centerOverviewZoom: CENTER_OVERVIEW_ZOOM
+        });
 
-            if (suppressNodeTapNodeId === tappedNodeId && Date.now() <= suppressNodeTapUntil) {
-                log('state', 'verbose', 'suppress node tap after card action', {
-                    nodeId: tappedNodeId,
-                    suppressNodeTapUntil
-                });
-                return;
-            }
-
-            if (currentCenterNodeId && tappedNodeId === String(currentCenterNodeId) && centerCardEnabled) {
-                log('state', 'info', 'ignore repeated center node tap', {
-                    nodeId: tappedNodeId,
-                    reason: 'center-refresh-only-via-header-action'
-                });
-                return;
-            }
-
-            const previousCenter = currentCenterNodeId;
-            const isRepeatCenterTap = !!previousCenter && previousCenter === tappedNodeId;
-            const isGlobalToNodeTransition = lastRequestMode === 'global';
-
-            log('state', 'info', 'node tap', {
-                nodeId: tappedNodeId,
-                hasCachedCenterDetails: centerDetailsCache.has(tappedNodeId),
-                isRepeatCenterTap,
-                transitionPath: `${previousCenter || 'null'} -> ${tappedNodeId}`
-            });
-
-            centerCardEnabled = true;
-            if (centerStateModule && typeof centerStateModule.setCenterCardEnabled === 'function') {
-                centerStateModule.setCenterCardEnabled(centerCardEnabled);
-            }
-            setCenterNode(tappedNodeId, 'tap-node');
-            if (centerPresentationModule && typeof centerPresentationModule.applyCenterCardPresentation === 'function') {
-                centerPresentationModule.applyCenterCardPresentation({
-                    cy,
-                    currentCenterNodeId,
-                    lastCenterNodeId,
-                    centerCardEnabled,
-                    htmlNodePluginReady,
-                    skipHtmlRender: true,
-                    log,
-                    renderHtmlNodeCards,
-                    clearNodeBypassSize: (nodeRef) => {
-                        centerPresentationModule.clearNodeBypassSize({ node: nodeRef, log, debugWarn });
-                    }
-                });
-            }
-
-            if (isGlobalToNodeTransition) {
-                pendingGlobalToNodeTransition = {
-                    centerNodeId: tappedNodeId,
-                    ts: Date.now()
-                };
-                applyGlobalToNodeTransitionMask(tappedNodeId);
-                panCenterNodeToViewport('global-to-node:tap-anchor');
-            } else {
-                pendingGlobalToNodeTransition = null;
-                clearGlobalToNodeTransitionMask('node-tap:non-global-transition');
-            }
-
-            const neighborhood = node.closedNeighborhood();
-            cy.elements().addClass('faded').removeClass('focus');
-            neighborhood.removeClass('faded');
-            node.addClass('focus');
-
-            requestNodeDependencies(tappedNodeId, 'node-tap', {
-                enableCenterCard: true,
-                setAsCenterNode: false
-            });
-        },
-        onNodeContextTap: (node) => {
-            const tappedNodeId = String(node.id());
-            if (!currentCenterNodeId || tappedNodeId !== String(currentCenterNodeId)) {
-                return;
-            }
-
-            if (centerPresentationModule
-                && typeof centerPresentationModule.toggleCenterNodePresentation === 'function'
-                && centerPresentationModule.toggleCenterNodePresentation({
-                    source: 'node-context',
-                    cy,
-                    lastRequestMode,
-                    currentCenterNodeId,
-                    centerCardEnabled,
-                    centerLockZoom: CENTER_LOCK_ZOOM,
-                    centerOverviewZoom: CENTER_OVERVIEW_ZOOM,
-                    setCenterCardEnabled: (nextValue) => {
-                        centerCardEnabled = !!nextValue;
-                        if (centerStateModule && typeof centerStateModule.setCenterCardEnabled === 'function') {
-                            centerStateModule.setCenterCardEnabled(centerCardEnabled);
-                        }
-                    },
-                    getCenterCardEnabled: () => centerCardEnabled,
-                    getCurrentCenterNodeId: () => currentCenterNodeId,
-                    applyCenterCardPresentation: (options = {}) => {
-                        centerPresentationModule.applyCenterCardPresentation({
-                            ...options,
-                            cy,
-                            currentCenterNodeId,
-                            lastCenterNodeId,
-                            centerCardEnabled,
-                            htmlNodePluginReady,
-                            log,
-                            renderHtmlNodeCards,
-                            clearNodeBypassSize: (nodeRef) => {
-                                centerPresentationModule.clearNodeBypassSize({ node: nodeRef, log, debugWarn });
-                            }
-                        });
-                    },
-                    clearNodeBypassSize: (nodeRef) => {
-                        centerPresentationModule.clearNodeBypassSize({ node: nodeRef, log, debugWarn });
-                    },
-                    animateCenterNodeViewport,
-                    lockCenterNodeViewport,
-                    log
-                })) {
-                return;
-            }
-        },
-        onBackgroundContextTap: () => {
-            if (centerPresentationModule
-                && typeof centerPresentationModule.toggleCenterNodePresentation === 'function'
-                && centerPresentationModule.toggleCenterNodePresentation({
-                    source: 'background-context',
-                    cy,
-                    lastRequestMode,
-                    currentCenterNodeId,
-                    centerCardEnabled,
-                    centerLockZoom: CENTER_LOCK_ZOOM,
-                    centerOverviewZoom: CENTER_OVERVIEW_ZOOM,
-                    setCenterCardEnabled: (nextValue) => {
-                        centerCardEnabled = !!nextValue;
-                        if (centerStateModule && typeof centerStateModule.setCenterCardEnabled === 'function') {
-                            centerStateModule.setCenterCardEnabled(centerCardEnabled);
-                        }
-                    },
-                    getCenterCardEnabled: () => centerCardEnabled,
-                    getCurrentCenterNodeId: () => currentCenterNodeId,
-                    applyCenterCardPresentation: (options = {}) => {
-                        centerPresentationModule.applyCenterCardPresentation({
-                            ...options,
-                            cy,
-                            currentCenterNodeId,
-                            lastCenterNodeId,
-                            centerCardEnabled,
-                            htmlNodePluginReady,
-                            log,
-                            renderHtmlNodeCards,
-                            clearNodeBypassSize: (nodeRef) => {
-                                centerPresentationModule.clearNodeBypassSize({ node: nodeRef, log, debugWarn });
-                            }
-                        });
-                    },
-                    clearNodeBypassSize: (nodeRef) => {
-                        centerPresentationModule.clearNodeBypassSize({ node: nodeRef, log, debugWarn });
-                    },
-                    animateCenterNodeViewport,
-                    lockCenterNodeViewport,
-                    log
-                })) {
-                return;
-            }
-
-            log('state', 'info', 'background context tap -> replay last query', {});
-            replayLastQuery('background-reset');
-        }
-    });
-
-    window.AnalysisUI.register({
-        onFit: () => cy.fit(undefined, 70),
-        onLayout: () => cy.layout(window.AnalysisStyle.getAltLayout()).run(),
-        onReset: () => replayLastQuery('manual-reset'),
-        onQueryGlobalRelation: () => requestGlobalRelation('toolbar-button')
-    });
+        relationGraphTab.bindGraphEvents();
+        relationGraphTab.bindToolbar();
+    }
 
     // 监听来自后端的消息
     window.addEventListener('message', (event) => {
@@ -1184,28 +870,10 @@
                 return;
             }
 
-            if (responseMeta?.command === 'queryNodeDependencies') {
-                const responseVersion = Number(responseMeta?.meta?.centerStateVersion);
-                const currentVersion = Number(
-                    centerStateModule && typeof centerStateModule.getCenterVersion === 'function'
-                        ? centerStateModule.getCenterVersion()
-                        : 0
-                );
-                const responseCenterNodeId = responseMeta?.meta?.centerNodeId ? String(responseMeta.meta.centerNodeId) : null;
-                const currentCenterId = currentCenterNodeId ? String(currentCenterNodeId) : null;
-                const hasVersion = Number.isFinite(responseVersion);
-
-                if ((hasVersion && responseVersion !== currentVersion)
-                    || (responseCenterNodeId && currentCenterId && responseCenterNodeId !== currentCenterId)) {
-                    log('query', 'info', 'drop stale node query response', {
-                        responseQueryId,
-                        responseVersion,
-                        currentVersion,
-                        responseCenterNodeId,
-                        currentCenterId
-                    });
-                    return;
-                }
+            if (relationGraphTab
+                && typeof relationGraphTab.handleBackendMessage === 'function'
+                && !relationGraphTab.handleBackendMessage(data, responseMeta)) {
+                return;
             }
 
             renderGraphData(data.data);
@@ -1243,6 +911,24 @@
                 centerPresentationModule.clearNodeBypassSize({ node: nodeRef, log, debugWarn });
             }
         });
+    }
+
+    if (tabManagerModule && typeof tabManagerModule.register === 'function') {
+        tabManagerModule.register('relationGraph', relationGraphTab || {});
+        tabManagerModule.register('callGraph', {
+            onActivate: (event) => {
+                log('state', 'info', 'activate call graph placeholder tab', {
+                    ...event,
+                    selectedFunctions: selectionStoreModule && typeof selectionStoreModule.getSnapshot === 'function'
+                        ? selectionStoreModule.getSnapshot().functionIds.length
+                        : 0
+                });
+            },
+            onDeactivate: (event) => {
+                log('state', 'info', 'deactivate call graph placeholder tab', event || {});
+            }
+        });
+        tabManagerModule.activate('relationGraph', 'startup');
     }
 
     requestGlobalRelation('startup-auto');

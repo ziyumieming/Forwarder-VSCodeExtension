@@ -71,7 +71,7 @@ export class CallExtractor {
             id: this.buildFallbackId(item, fallbackType),
             type: fallbackType,
             name: item.name,
-            namespace: '',
+            namespace: '',// 兜底，非函数或方法，回退时拿不到可靠信息
             uri: item.uri,
             range: item.range
         };

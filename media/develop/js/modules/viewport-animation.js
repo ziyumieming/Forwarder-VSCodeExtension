@@ -85,7 +85,7 @@
         var lastRequestMode = safeOptions.lastRequestMode;
         var log = typeof safeOptions.log === 'function' ? safeOptions.log : null;
 
-        if (!cy || !currentCenterNodeId || lastRequestMode !== 'node') {
+        if (!cy || !currentCenterNodeId || (lastRequestMode !== 'node' && lastRequestMode !== 'relation-node')) {
             return false;
         }
 
@@ -125,7 +125,7 @@
         var animationToken = safeOptions.animationToken;
         var layoutAnimationToken = safeOptions.layoutAnimationToken;
 
-        if (!cy || !currentCenterNodeId || lastRequestMode !== 'node') {
+        if (!cy || !currentCenterNodeId || (lastRequestMode !== 'node' && lastRequestMode !== 'relation-node')) {
             return false;
         }
 
@@ -177,7 +177,7 @@
         var animationToken = safeOptions.animationToken;
         var layoutAnimationToken = safeOptions.layoutAnimationToken;
 
-        if (!cy || !currentCenterNodeId || lastRequestMode !== 'node') {
+        if (!cy || !currentCenterNodeId || (lastRequestMode !== 'node' && lastRequestMode !== 'relation-node')) {
             return false;
         }
 
