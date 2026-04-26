@@ -31,10 +31,75 @@
             });
     }
 
+    function firstNonBlank() {
+        for (var i = 0; i < arguments.length; i++) {
+            var value = arguments[i];
+            if (value === undefined || value === null) {
+                continue;
+            }
+
+            var text = String(value).trim();
+            if (text.length > 0) {
+                return text;
+            }
+        }
+
+        return '';
+    }
+
+    function labelFromNodeId(nodeId) {
+        var id = String(nodeId || '').trim();
+        if (!id) {
+            return 'Unknown';
+        }
+
+        var hashParts = id.split('#').filter(function (part) {
+            return String(part).trim().length > 0;
+        });
+        var tail = hashParts.length > 0 ? hashParts[hashParts.length - 1] : id;
+
+        return firstNonBlank(tail, id, 'Unknown');
+    }
+
+    function getNodeDisplayLabel(node) {
+        var safeNode = node || {};
+        return firstNonBlank(
+            safeNode.displayName,
+            safeNode.name,
+            safeNode.label,
+            labelFromNodeId(safeNode.id)
+        );
+    }
+
+    var RELATION_LABEL_ORDER = {
+        extends: 10,
+        implements: 20,
+        composes: 30,
+        aggregates: 40,
+        uses: 50,
+        calls: 60,
+        references: 70,
+        contains: 80
+    };
+
+    function normalizeRelationLabel(relation) {
+        return firstNonBlank(relation, 'relation');
+    }
+
+    function sortRelationLabels(left, right) {
+        var leftOrder = RELATION_LABEL_ORDER[left] || 999;
+        var rightOrder = RELATION_LABEL_ORDER[right] || 999;
+        if (leftOrder !== rightOrder) {
+            return leftOrder - rightOrder;
+        }
+
+        return left.localeCompare(right);
+    }
+
     function readClassCardFromNode(node) {
         var safeNode = node || {};
         var classCard = safeNode.classCard || {};
-        var title = classCard.title || safeNode.displayName || safeNode.name || safeNode.label || String(safeNode.id || '');
+        var title = firstNonBlank(classCard.title, getNodeDisplayLabel(safeNode));
 
         var fields = toStringList(classCard.fields || safeNode.fields || safeNode.properties || []);
         var methods = toStringList(classCard.methods || safeNode.methods || []);
@@ -53,7 +118,7 @@
 
         return {
             nodeId: String(centerDetails.nodeId),
-            title: String(centerDetails.name || centerDetails.displayName || centerDetails.nodeId),
+            title: firstNonBlank(centerDetails.name, centerDetails.displayName, labelFromNodeId(centerDetails.nodeId)),
             fields: toStringList(centerDetails.fields || []),
             methods: toStringList(centerDetails.methods || [])
         };
@@ -112,7 +177,7 @@
         var cardOptions = getClassCardOptions() || {};
         var collapsed = new Set(Array.isArray(cardOptions.collapsedSections) ? cardOptions.collapsedSections : []);
         var safeClassCard = classCard || {};
-        var title = String(safeClassCard.title || 'Unknown');
+        var title = firstNonBlank(safeClassCard.title, 'Unknown');
         var fields = Array.isArray(safeClassCard.fields) ? safeClassCard.fields : [];
         var methods = Array.isArray(safeClassCard.methods) ? safeClassCard.methods : [];
 
@@ -264,7 +329,7 @@
             })
             .map(function (node) {
                 var id = String(node.id);
-                var baseLabel = node.displayName || node.name || node.label || id;
+                var baseLabel = getNodeDisplayLabel(node);
                 var classCard = resolveClassCardForNode(node, incomingCenterDetails, {
                     centerDetailsCache: centerDetailsCache,
                     pendingCenterDetailsNodeId: pendingCenterDetailsNodeId
@@ -297,21 +362,49 @@
                 };
             });
 
-        var edgeElements = graphData.edges
-            .map(function (edge) {
-                var source = edge.source || edge.sourceId || edge.from;
-                var target = edge.target || edge.targetId || edge.to;
+        var edgeMap = new Map();
+        graphData.edges.forEach(function (edge) {
+            if (!edge) {
+                return;
+            }
 
-                if (!source || !target) {
-                    return null;
-                }
+            var source = edge.source || edge.sourceId || edge.from;
+            var target = edge.target || edge.targetId || edge.to;
+
+            if (!source || !target) {
+                return;
+            }
+
+            var normalizedSource = String(source);
+            var normalizedTarget = String(target);
+            var edgeKey = normalizedSource + '->' + normalizedTarget;
+            var relation = normalizeRelationLabel(edge.relation || edge.type);
+            var entry = edgeMap.get(edgeKey);
+
+            if (!entry) {
+                entry = {
+                    source: normalizedSource,
+                    target: normalizedTarget,
+                    relations: new Set()
+                };
+                edgeMap.set(edgeKey, entry);
+            }
+
+            entry.relations.add(relation);
+        });
+
+        var edgeElements = Array.from(edgeMap.values())
+            .map(function (entry) {
+                var relations = Array.from(entry.relations).sort(sortRelationLabels);
+                var relationLabel = relations.join(' / ');
 
                 return {
                     data: {
-                        id: edge.id || (source + '-' + target + '-' + (edge.relation || edge.type || 'relation')),
-                        source: String(source),
-                        target: String(target),
-                        type: edge.relation || edge.type || 'relation'
+                        id: entry.source + '-' + entry.target + '-' + relationLabel,
+                        source: entry.source,
+                        target: entry.target,
+                        type: relationLabel,
+                        relations: relations
                     }
                 };
             })

@@ -12,11 +12,18 @@ export interface ResolvedSymbolInfo {
     range: vscode.Range;
 }
 
+export type SymbolCache = Map<string, vscode.DocumentSymbol[]>;
+
+export interface ExtractionResult {
+    edges: EdgeData[];
+    placeholderNodes: IRNode[];
+}
+
 export class ExtractorUtils {
     public static async resolveSymbolInfo(
         uri: vscode.Uri,
         position: vscode.Position,
-        cache: Map<string, vscode.DocumentSymbol[]>
+        cache: SymbolCache
     ): Promise<ResolvedSymbolInfo | undefined> {
         const uriStr = uri.toString();
         let symbols = cache.get(uriStr);
@@ -34,7 +41,7 @@ export class ExtractorUtils {
     public static async resolveDefinitionSymbolInfo(
         uri: vscode.Uri,
         position: vscode.Position,
-        cache: Map<string, vscode.DocumentSymbol[]>
+        cache: SymbolCache
     ): Promise<ResolvedSymbolInfo | undefined> {
         let definitions = await LSPService.getDefinition(uri, position);
         if (!definitions || definitions.length === 0) {
@@ -79,7 +86,7 @@ export class ExtractorUtils {
         const isLibrary = !vscode.workspace.getWorkspaceFolder(info.uri);
         placeholderNodes.push({
             id: info.id,
-            name: info.name,
+            name: this.getFallbackName(info),
             type: info.type,
             namespace: info.namespace || undefined,
             location: {
@@ -92,6 +99,50 @@ export class ExtractorUtils {
             placeHolder: true,
             isLibrary
         });
+    }
+
+    public static addResolvedRelation(
+        edges: EdgeData[],
+        placeholderNodes: IRNode[],
+        sourceId: string,
+        targetInfo: ResolvedSymbolInfo,
+        relation: EdgeRelation
+    ): boolean {
+        const added = this.addEdgeOnce(edges, sourceId, targetInfo.id, relation);
+        if (added) {
+            this.addPlaceholderOnce(placeholderNodes, targetInfo);
+        }
+        return added;
+    }
+
+    public static async addRelationsFromPositions(
+        document: vscode.TextDocument,
+        sourceId: string,
+        positions: vscode.Position[],
+        relation: EdgeRelation,
+        edges: EdgeData[],
+        placeholderNodes: IRNode[],
+        cache: SymbolCache
+    ): Promise<void> {
+        for (const pos of positions) {
+            const targetInfo = await this.resolveDefinitionSymbolInfo(document.uri, pos, cache);
+            if (!targetInfo || sourceId === targetInfo.id) {
+                continue;
+            }
+
+            this.addResolvedRelation(edges, placeholderNodes, sourceId, targetInfo, relation);
+        }
+    }
+
+    private static getFallbackName(info: ResolvedSymbolInfo): string {
+        const name = String(info.name || '').trim();
+        if (name.length > 0) {
+            return name;
+        }
+
+        const idParts = info.id.split('#').filter(part => part.trim().length > 0);
+        const tail = idParts.length > 0 ? idParts[idParts.length - 1].trim() : '';
+        return tail || 'Unknown';
     }
 
     private static findSymbolByPosition(
