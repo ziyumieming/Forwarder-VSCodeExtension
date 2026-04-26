@@ -11,6 +11,7 @@ export interface AnalysisTask {
     uri: vscode.Uri;
     reason: string;
     cascade: boolean;
+    generation: number;
 }
 
 export class AnalysisRuntime {
@@ -34,6 +35,8 @@ export class AnalysisRuntime {
     private isProcessing: boolean = false;
     private activeTask?: AnalysisTask;
     private pendingDeletions: Map<string, NodeJS.Timeout> = new Map();
+    private analysisGeneration: number = 0;
+    private queueIdleResolvers: (() => void)[] = [];
 
     // 后端就绪状态阻塞原语
     private readyPromise: Promise<void>;
@@ -70,7 +73,9 @@ export class AnalysisRuntime {
                 if (this.syncService) {
                     await this.syncService.clearIndex();
                 }
+                this.analysisGeneration++;
                 this.projectGraph.clearAll();
+                this.resetReadyPromise();
                 this.runIncrementalSync().catch(err => {
                     logger.info(`[AnalysisRuntime] 重新扫描失败: ${err}`);
                 });
@@ -114,10 +119,6 @@ export class AnalysisRuntime {
         }
         this.createListener = vscode.workspace.onDidCreateFiles(async e => {
             for (const file of e.files) {
-                const uriStr = file.toString();
-                if (this.syncService) {
-                    await this.syncService.addOrUpdateFileInIndex(file);
-                }
                 this.enqueueTask(file, '监听发现文件新增', true);//在队列的开头会取消等待的删除
             }
         });
@@ -129,9 +130,6 @@ export class AnalysisRuntime {
         this.saveListener = vscode.workspace.onDidSaveTextDocument(async doc => {
             if (doc.uri.scheme === 'file') {
                 logger.info(`[AnalysisRuntime] 文件保存触发重扫: ${doc.uri.fsPath}`);
-                if (this.syncService) {
-                    await this.syncService.addOrUpdateFileInIndex(doc.uri);
-                }
                 this.enqueueTask(doc.uri, '文件保存后触发重新同步解析', true);
             }
         });
@@ -199,6 +197,8 @@ export class AnalysisRuntime {
         if (!this.syncService) {
             throw new Error('[AnalysisRuntime] 尚未初始化 storagePath，无法运行增量扫描。');
         }
+
+        const syncGeneration = this.analysisGeneration;
 
         try {
             logger.info('[AnalysisRuntime] 开始启动增量同步...');
@@ -272,16 +272,17 @@ export class AnalysisRuntime {
                 logger.info('[AnalysisRuntime] 增量同步完成！无新增更新项。');
             }
         } finally {
-            // 解析完成后，解除启动拦截（就算出错也不能彻底卡死）
+            // 解析队列消费完毕后再解除启动拦截，避免前端查询到重建中的半成品图。
+            await this.waitForQueueIdle(syncGeneration);
             this.resolveReady();
-            logger.info('[AnalysisRuntime] 初始启动数据载入完成，释放后端查询阻塞。');
+            logger.info('[AnalysisRuntime] 初始启动数据载入和分析队列处理完成，释放后端查询阻塞。');
         }
     }
 
     /**
      * 将文件分析任务推入调度队列
      */
-    public enqueueTask(uri: vscode.Uri, reason: string, cascade: boolean = true): void {
+    public enqueueTask(uri: vscode.Uri, reason: string, cascade: boolean = true, generation: number = this.analysisGeneration): void {
         const uriStr = uri.toString();
 
         // 当文件被加入分析队列（创建/更新）时，取消它可能正在倒计时的假删除/撤回删除
@@ -301,7 +302,7 @@ export class AnalysisRuntime {
                 this.taskQueue[existingIndex].reason = reason;
             }
         } else {
-            this.taskQueue.push({ uri, reason, cascade });
+            this.taskQueue.push({ uri, reason, cascade, generation });
         }
 
         // 尝试启动异步消费
@@ -323,6 +324,11 @@ export class AnalysisRuntime {
             while (this.taskQueue.length > 0) {
                 this.activeTask = this.taskQueue.shift()!;
                 const task = this.activeTask;
+                if (task.generation !== this.analysisGeneration) {
+                    logger.info(`[AnalysisRuntime] 跳过旧世代分析任务: ${task.uri.fsPath}`);
+                    this.activeTask = undefined;
+                    continue;
+                }
                 // 记录到未提交集合，供突发退出时追回
                 this.uncommittedTasks.set(task.uri.toString(), task);
                 logger.info(`[AnalysisRuntime] 分析队列执行文件: ${task.uri.fsPath} (原因: ${task.reason})`);
@@ -335,13 +341,22 @@ export class AnalysisRuntime {
                         continue;
                     }
 
-                    const affectedUris = await this.doAnalyzeFile(task.uri);
+                    const affectedUris = await this.doAnalyzeFile(task.uri, task.generation);
+                    if (!affectedUris) {
+                        this.uncommittedTasks.delete(task.uri.toString());
+                        this.activeTask = undefined;
+                        continue;
+                    }
+
+                    if (this.syncService) {
+                        await this.syncService.commitFileToIndex(task.uri);
+                    }
 
                     // 5. 如果开启了级联发现相关被波及文件，需要入队重新扫描它，但它的结果不再级联
                     if (task.cascade && affectedUris && affectedUris.length > 0) {
                         for (const affectedUriStr of affectedUris) {
                             const affectedUri = vscode.Uri.parse(affectedUriStr);
-                            this.enqueueTask(affectedUri, `依赖的源文件 ${task.uri.fsPath} 结构变更的级联更新`, false);
+                            this.enqueueTask(affectedUri, `依赖的源文件 ${task.uri.fsPath} 结构变更的级联更新`, false, task.generation);
                         }
                     }
                 } catch (err: any) {
@@ -365,6 +380,8 @@ export class AnalysisRuntime {
                 this._processTaskQueue().catch(err => {
                     logger.info(`[AnalysisRuntime] 追加队列处理异常: ${err.message}`);
                 });
+            } else {
+                this.resolveQueueIdleWaiters();
             }
         }
     }
@@ -380,7 +397,7 @@ export class AnalysisRuntime {
      * 真正的内部控制流: 分析并将单个文件及其内部关系存入图数据结构
      * @param uri 目标文件的 Uri
      */
-    private async doAnalyzeFile(uri: vscode.Uri): Promise<string[]> {
+    private async doAnalyzeFile(uri: vscode.Uri, generation: number): Promise<string[] | undefined> {
         logger.info(`[AnalysisRuntime] 正在进行文件实质性解析: ${uri.fsPath}`);
 
         // 从缓存中获取之前的结构指纹
@@ -389,9 +406,14 @@ export class AnalysisRuntime {
         // 1. 调用适配器服务，从LSP提取并组装指定文件的 IRNode 与内部关系边界
         const payload = await AdapterService.extractFileSymbols(uri, oldFingerprint);
 
+        if (generation !== this.analysisGeneration) {
+            logger.info(`[AnalysisRuntime] 丢弃旧世代解析结果: ${uri.fsPath}`);
+            return undefined;
+        }
+
         if (!payload || payload.nodes.length === 0) {
             logger.info(`[AnalysisRuntime] 未能从 ${uri.fsPath} 提取到结构信息或文件为空。`);
-            return [];
+            return undefined;
         }
 
         // 提前阻断: 结构语义未发生本质改变
@@ -411,12 +433,14 @@ export class AnalysisRuntime {
     // 编排调用: 查询全局视图
     public async queryGlobalRelation(relations: EdgeRelation[], includeExternal?: boolean): Promise<GraphViewData> {
         await this.readyPromise;
+        await this.waitForQueueIdle(this.analysisGeneration);
         return ViewQueryService.queryGlobalRelation(this.projectGraph, relations, includeExternal);
     }
 
     // 编排调用: 查询节点依赖
     public async queryNodeDependencies(nodeId: string, allowedRelations?: EdgeRelation[], includeExternal?: boolean): Promise<GraphViewData> {
         await this.readyPromise;
+        await this.waitForQueueIdle(this.analysisGeneration);
         return ViewQueryService.queryNodeDependencies(this.projectGraph, nodeId, allowedRelations, includeExternal);
     }
 
@@ -426,6 +450,7 @@ export class AnalysisRuntime {
      */
     public async clearAndRebuildGraph(): Promise<void> {
         logger.info('[AnalysisRuntime] 清空图并准备重建...');
+        this.analysisGeneration++;
 
         // 1. 清空内存图结构
         this.projectGraph.clearAll();
@@ -448,14 +473,53 @@ export class AnalysisRuntime {
         logger.info('[AnalysisRuntime] 任务队列已清空');
 
         // 4. 重新初始化 readyPromise
-        this.readyPromise = new Promise((resolve) => {
-            this.resolveReady = resolve;
-        });
+        this.resetReadyPromise();
 
         // 5. 触发完整重新扫描和增量同步
         logger.info('[AnalysisRuntime] 开始重新扫描工作区...');
         await this.runIncrementalSync();
         logger.info('[AnalysisRuntime] 图重建完成！');
+    }
+
+    private isQueueIdleForGeneration(generation: number): boolean {
+        if (this.isProcessing) {
+            return false;
+        }
+
+        if (this.activeTask && this.activeTask.generation === generation) {
+            return false;
+        }
+
+        return !this.taskQueue.some(task => task.generation === generation);
+    }
+
+    private waitForQueueIdle(generation: number): Promise<void> {
+        if (this.isQueueIdleForGeneration(generation)) {
+            return Promise.resolve();
+        }
+
+        return new Promise(resolve => {
+            this.queueIdleResolvers.push(() => {
+                if (this.isQueueIdleForGeneration(generation)) {
+                    resolve();
+                } else {
+                    this.waitForQueueIdle(generation).then(resolve);
+                }
+            });
+        });
+    }
+
+    private resolveQueueIdleWaiters(): void {
+        const resolvers = this.queueIdleResolvers.splice(0);
+        for (const resolve of resolvers) {
+            resolve();
+        }
+    }
+
+    private resetReadyPromise(): void {
+        this.readyPromise = new Promise((resolve) => {
+            this.resolveReady = resolve;
+        });
     }
 
     /**

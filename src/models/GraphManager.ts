@@ -153,12 +153,18 @@ export class ProjectGraph {
                 }
                 this._addNode(node);
             } else {
-                // 已经存在的节点，更新其普通属性如 location，name
+                // 已经存在的节点，用最新 IR 完整覆盖。尤其要允许真实节点升级此前的占位节点。
                 const existing = this.nodes.get(node.id);
                 if (existing) {
-                    existing.location = node.location;
-                    existing.name = node.name;
-                    // ... type 和 namespace 原则上 id 包含，不易变
+                    if (!existing.placeHolder && node.placeHolder) {
+                        continue;
+                    }
+                    this.nodes.set(node.id, {
+                        ...existing,
+                        ...node,
+                        placeHolder: node.placeHolder === true,
+                        isLibrary: node.isLibrary
+                    });
                 }
             }
         }

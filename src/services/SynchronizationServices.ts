@@ -32,6 +32,7 @@ export class SynchronizationService {
     private manifestPath: string;
     private pendingPath: string;
     private fileIndex: FileIndexSnapshot = {};
+    private pendingFileUpdates: FileIndexSnapshot = {};
     private isSingleFileMode: boolean;
     private singleFileUri?: string;
 
@@ -99,6 +100,7 @@ export class SynchronizationService {
             }
         }
         this.fileIndex = {};
+        this.pendingFileUpdates = {};
     }
 
     private async saveManifest(): Promise<void> {
@@ -373,6 +375,7 @@ export class SynchronizationService {
 
                 // 更新索引
                 this.fileIndex[addition.uri.toString()] = { mtimeMs: addition.mtimeMs, hash: addition.hash };
+                delete this.fileIndex[matchedDeletion.uriString];
             }
         }
 
@@ -380,7 +383,10 @@ export class SynchronizationService {
         for (const addition of potentialAdditions) {
             if (!additionMatched.has(addition.uri.toString())) {
                 changes.addedOrModified.push(addition.uri);
-                this.fileIndex[addition.uri.toString()] = { mtimeMs: addition.mtimeMs, hash: addition.hash };
+                this.pendingFileUpdates[addition.uri.toString()] = {
+                    mtimeMs: addition.mtimeMs,
+                    hash: addition.hash
+                };
             }
         }
 
@@ -402,19 +408,30 @@ export class SynchronizationService {
      */
     public async clearIndex(): Promise<void> {
         this.fileIndex = {};
+        this.pendingFileUpdates = {};
         await this.saveFileIndex();
     }
 
     /**
-     * 新增或更新文件在快照索引中的状态并保存
+     * 分析成功后提交文件在快照索引中的状态并保存。
+     * 若此前由扫描阶段记录了待提交状态，优先使用扫描时的 mtime/hash，避免重复读取大文件。
      */
-    public async addOrUpdateFileInIndex(uri: vscode.Uri): Promise<void> {
+    public async commitFileToIndex(uri: vscode.Uri): Promise<void> {
+        const uriString = uri.toString();
+        const pending = this.pendingFileUpdates[uriString];
+        if (pending) {
+            this.fileIndex[uriString] = pending;
+            delete this.pendingFileUpdates[uriString];
+            await this.saveFileIndex();
+            return;
+        }
+
         const fsPath = uri.fsPath;
         try {
             const stat = await fs.promises.stat(fsPath);
             const mtimeMs = stat.mtimeMs;
             const hash = await this.computeFileHash(fsPath);
-            this.fileIndex[uri.toString()] = { mtimeMs, hash };
+            this.fileIndex[uriString] = { mtimeMs, hash };
             await this.saveFileIndex();
         } catch (err: any) {
             logger.info(`[SyncService] 更新文件索引失败: ${err.message}`);
@@ -422,10 +439,19 @@ export class SynchronizationService {
     }
 
     /**
+     * 新增或更新文件在快照索引中的状态并保存。
+     * 保留此接口用于非分析路径；主分析流程应使用 commitFileToIndex。
+     */
+    public async addOrUpdateFileInIndex(uri: vscode.Uri): Promise<void> {
+        await this.commitFileToIndex(uri);
+    }
+
+    /**
      * 手动从快照索引中移除该文件并保存
      */
     public async removeFileFromIndex(uri: vscode.Uri): Promise<void> {
         delete this.fileIndex[uri.toString()];
+        delete this.pendingFileUpdates[uri.toString()];
         await this.saveFileIndex();
     }
 
