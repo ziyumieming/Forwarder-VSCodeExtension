@@ -4,6 +4,7 @@
         const implementsChecked = document.getElementById('rel-implements')?.checked ?? false;
         const composesChecked = document.getElementById('rel-composes')?.checked ?? false;
         const dependencyChecked = document.getElementById('rel-dependency')?.checked ?? false;
+        const aggregatesChecked = document.getElementById('rel-aggregates')?.checked ?? false;
         const includeExternal = document.getElementById('include-external')?.checked ?? false;
 
         const relations = [];
@@ -18,6 +19,9 @@
         }
         if (dependencyChecked) {
             relations.push('uses');
+        }
+        if (aggregatesChecked) {
+            relations.push('aggregates');
         }
 
         return {

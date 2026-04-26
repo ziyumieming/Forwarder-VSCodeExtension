@@ -29,7 +29,7 @@ export interface IRNode {
     };
 }
 
-export type EdgeRelation = 'contains' | 'extends' | 'implements' | 'calls' | 'references' | 'composes' | 'uses';
+export type EdgeRelation = 'contains' | 'extends' | 'implements' | 'calls' | 'references' | 'composes' | 'uses' | 'aggregates';
 
 
 export interface EdgeData {

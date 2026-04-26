@@ -4,7 +4,7 @@ import { LSPService } from '../../services/LSPServices';
 import { DocumentSymbolIndex } from '../../services/AdapterServices';
 import { SymbolRule } from '../../models/SymbolRule';
 import { logger } from '../../utils/logger';
-import { ExtractorUtils } from '../Extractor';
+import { ExtractorUtils } from '../ExtractorUtils';
 
 export class GoInheritanceExtractor {
     public static async analyze(

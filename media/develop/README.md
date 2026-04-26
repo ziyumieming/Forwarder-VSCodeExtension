@@ -9,6 +9,14 @@ Forwarder is a VS Code extension for code-structure analysis and interactive gra
 - Support center-card presentation mode with interactive class member actions.
 - Keep graph rendering performant with incremental node-mode updates.
 
+## Relation Semantics
+
+- `composes`: a class owns a field whose type resolves to another class or interface.
+- `uses`: a method signature references another class or interface through parameters or return values.
+- `aggregates`: an external parameter is assigned into a field of the same resolved type, such as `this.repo = repo`, `self.repo = repo`, or `receiver.repo = repo`.
+
+The Webview relation filter exposes Aggregates as a default-enabled option alongside Extends, Implements, Composes, and Dependencies.
+
 ## Frontend Architecture (After Refactor)
 
 The Webview frontend keeps non-ESM script loading and uses a thin orchestration layer in main.js.

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { EdgeData, IRNode, NodeType } from '../../models/GraphDefinition';
 import { LSPService } from '../../services/LSPServices';
 import { DocumentSymbolIndex } from '../../services/AdapterServices';
-import { ExtractorUtils } from '../Extractor';
+import { ExtractorUtils } from '../ExtractorUtils';
 
 export class PythonInheritanceExtractor {
     public static async analyze(

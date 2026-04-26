@@ -2,7 +2,11 @@ import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { IRNode, NodeType, EdgeData, FileSymbolsPayload } from '../models/GraphDefinition';
 import { LSPService } from './LSPServices';
-import { InheritanceExtractor, CompositionExtractor, DependencyExtractor } from '../adapters/Extractor';
+import { InheritanceExtractor } from '../adapters/InheritanceExtractor';
+import { CompositionExtractor } from '../adapters/CompositionExtractor';
+import { DependencyExtractor } from '../adapters/DependencyExtractor';
+import { AggregationExtractor } from '../adapters/AggregationExtractor';
+
 import { SymbolRule } from '../models/SymbolRule';
 import { logger } from '../utils/logger';
 
@@ -99,6 +103,14 @@ export class AdapterService {
 
         edges.push(...dependencyResult.edges);
         nodes.push(...dependencyResult.placeholderNodes);
+
+        // 5. 聚合关系抽取（外部参数写入字段）
+        logger.info(`[AdapterService.extractFileSymbols] 开始提取聚合关系（外部注入字段）`);
+        const aggregationResult = await AggregationExtractor.analyze(document, symbolIndex, uriString, document.languageId);
+        logger.info(`[AdapterService.extractFileSymbols] 聚合关系提取完毕: ${aggregationResult.edges.length} 条边, ${aggregationResult.placeholderNodes.length} 个占位符节点`);
+
+        edges.push(...aggregationResult.edges);
+        nodes.push(...aggregationResult.placeholderNodes);
 
         const result: FileSymbolsPayload = {
             uri: uriString,

@@ -271,7 +271,23 @@ export class DebugController {
             }
         }
 
-        // 查询 6: 节点邻接网络 - 找出第一个class或interface节点作为示例
+        // 查询 6: aggregates 关系（外部注入对象写入字段）
+        const aggregatesData = ViewQueryService.queryGlobalRelation(graph, ['aggregates'], true);
+        logger.info(`\n  ├─ Aggregates 关系查询结果:`);
+        logger.info(`    节点数: ${aggregatesData.nodes.length}, 边数: ${aggregatesData.edges.length}`);
+        if (aggregatesData.edges.length > 0) {
+            const nodeMap = new Map(aggregatesData.nodes.map(n => [n.id, n]));
+            aggregatesData.edges.slice(0, 5).forEach(edge => {
+                const source = nodeMap.get(edge.sourceId);
+                const target = nodeMap.get(edge.targetId);
+                logger.info(`      ${source?.name || '?'} aggregates ${target?.name || '?'}`);
+            });
+            if (aggregatesData.edges.length > 5) {
+                logger.info(`      ... 以及 ${aggregatesData.edges.length - 5} 条边（省略）`);
+            }
+        }
+
+        // 查询 7: 节点邻接网络 - 找出第一个class或interface节点作为示例
         const targetNode = nodes.find(n => n.type === 'class' || n.type === 'interface');
         if (targetNode) {
             logger.info(`\n  └─ 节点邻接网络查询示例 (节点: ${targetNode.name}):`);
@@ -551,6 +567,24 @@ export class DebugController {
                     const sourceLabel = source ? `${source.name} [${source.type}]` : '?';
                     const targetLabel = target ? `${target.name} [${target.type}]` : '?';
                     logger.info(`    ${sourceLabel} uses ${targetLabel}`);
+                }
+            }
+
+            // 查询 aggregates 关系（外部注入对象写入字段）
+            logger.info(`\n[8] Querying 'aggregates' relations:`);
+            const aggregatesData = ViewQueryService.queryGlobalRelation(graph, ['aggregates'], true);
+            logger.info(`    Nodes: ${aggregatesData.nodes.length}, Edges: ${aggregatesData.edges.length}\n`);
+
+            if (aggregatesData.edges.length === 0) {
+                logger.info(`    (no 'aggregates' relations found)\n`);
+            } else {
+                const nodeMap = new Map(aggregatesData.nodes.map(n => [n.id, n]));
+                for (const edge of aggregatesData.edges) {
+                    const source = nodeMap.get(edge.sourceId);
+                    const target = nodeMap.get(edge.targetId);
+                    const sourceLabel = source ? `${source.name} [${source.type}]` : '?';
+                    const targetLabel = target ? `${target.name} [${target.type}]` : '?';
+                    logger.info(`    ${sourceLabel} aggregates ${targetLabel}`);
                 }
             }
 
