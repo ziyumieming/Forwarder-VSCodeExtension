@@ -142,47 +142,28 @@ export class ViewQueryService {
 
         const visited = new Set<string>([nodeId]);
         const edgeMap = new Map<string, EdgeData>();
-        const queue: { id: string; depth: number }[] = [{ id: nodeId, depth: 0 }];
         let truncated = false;
 
-        while (queue.length > 0) {
-            const current = queue.shift()!;
-            if (current.depth >= depth) {
-                continue;
-            }
+        if (direction === 'outgoing' || direction === 'both') {
+            truncated = this.expandDirectedCallTree(graph, nodeId, 'outgoing', {
+                depth,
+                includeExternal,
+                maxNodes,
+                maxEdges,
+                visited,
+                edgeMap
+            }) || truncated;
+        }
 
-            const nextEdges = graph.getCallEdges(current.id, direction);
-            for (const edge of nextEdges) {
-                const source = graph.getNode(edge.sourceId);
-                const target = graph.getNode(edge.targetId);
-                if (!source || !target) {
-                    continue;
-                }
-
-                if (!includeExternal && (source.isLibrary || target.isLibrary) && edge.sourceId !== nodeId && edge.targetId !== nodeId) {
-                    continue;
-                }
-
-                const edgeKey = this.getEdgeKey(edge);
-                if (!edgeMap.has(edgeKey)) {
-                    if (edgeMap.size >= maxEdges) {
-                        truncated = true;
-                        continue;
-                    }
-                    edgeMap.set(edgeKey, edge);
-                }
-
-                const nextNodeId = edge.sourceId === current.id ? edge.targetId : edge.sourceId;
-                if (!visited.has(nextNodeId)) {
-                    if (visited.size >= maxNodes) {
-                        truncated = true;
-                        continue;
-                    }
-
-                    visited.add(nextNodeId);
-                    queue.push({ id: nextNodeId, depth: current.depth + 1 });
-                }
-            }
+        if (direction === 'incoming' || direction === 'both') {
+            truncated = this.expandDirectedCallTree(graph, nodeId, 'incoming', {
+                depth,
+                includeExternal,
+                maxNodes,
+                maxEdges,
+                visited,
+                edgeMap
+            }) || truncated;
         }
 
         const nodes = this.filterNodesForExternal(graph.getNodes(visited), nodeId, includeExternal);
@@ -250,7 +231,7 @@ export class ViewQueryService {
                 continue;
             }
 
-            const nextEdges = graph.getCallEdges(current.id, direction);
+            const nextEdges = graph.getEdges(current.id, 'calls', direction);
             for (const edge of nextEdges) {
                 const nextNodeId = edge.sourceId === current.id ? edge.targetId : edge.sourceId;
                 const nextNode = graph.getNode(nextNodeId);
@@ -460,6 +441,70 @@ export class ViewQueryService {
         }
 
         return nodes.filter(node => !node.isLibrary || node.id === centerNodeId);
+    }
+
+    private static expandDirectedCallTree(
+        graph: ProjectGraph,
+        rootNodeId: string,
+        direction: 'incoming' | 'outgoing',
+        state: {
+            depth: number;
+            includeExternal: boolean;
+            maxNodes: number;
+            maxEdges: number;
+            visited: Set<string>;
+            edgeMap: Map<string, EdgeData>;
+        }
+    ): boolean {
+        const queue: { id: string; depth: number }[] = [{ id: rootNodeId, depth: 0 }];
+        let truncated = false;
+
+        while (queue.length > 0) {
+            const current = queue.shift()!;
+            if (current.depth >= state.depth) {
+                continue;
+            }
+
+            const nextEdges = graph.getEdges(current.id, 'calls', direction);
+            for (const edge of nextEdges) {
+                const source = graph.getNode(edge.sourceId);
+                const target = graph.getNode(edge.targetId);
+                if (!source || !target) {
+                    continue;
+                }
+
+                const nextNodeId = direction === 'outgoing' ? edge.targetId : edge.sourceId;
+                const nextNode = graph.getNode(nextNodeId);
+                if (!nextNode) {
+                    continue;
+                }
+
+                if (!state.includeExternal && nextNode.isLibrary && nextNodeId !== rootNodeId) {
+                    continue;
+                }
+
+                const edgeKey = this.getEdgeKey(edge);
+                if (!state.edgeMap.has(edgeKey)) {
+                    if (state.edgeMap.size >= state.maxEdges) {
+                        truncated = true;
+                        continue;
+                    }
+                    state.edgeMap.set(edgeKey, edge);
+                }
+
+                if (!state.visited.has(nextNodeId)) {
+                    if (state.visited.size >= state.maxNodes) {
+                        truncated = true;
+                        continue;
+                    }
+
+                    state.visited.add(nextNodeId);
+                    queue.push({ id: nextNodeId, depth: current.depth + 1 });
+                }
+            }
+        }
+
+        return truncated;
     }
 
     private static getEdgeKey(edge: EdgeData): string {

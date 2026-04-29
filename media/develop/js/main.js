@@ -820,7 +820,17 @@
             log,
             getActiveTabId: () => tabManagerModule && typeof tabManagerModule.getActiveTabId === 'function'
                 ? tabManagerModule.getActiveTabId()
-                : 'relationGraph'
+                : 'relationGraph',
+            onQueryPath: (source) => {
+                if (callGraphTab && typeof callGraphTab.requestPathGraph === 'function') {
+                    callGraphTab.requestPathGraph(source || 'path-tray');
+                }
+            },
+            onSetCenter: (functionRef, source) => {
+                if (callGraphTab && typeof callGraphTab.setCenterFunction === 'function') {
+                    callGraphTab.setCenterFunction(functionRef, source || 'path-tray');
+                }
+            }
         });
 
         if (typeof callPathTray.bind === 'function') {
@@ -958,6 +968,13 @@
                 if (callPathTray && typeof callPathTray.refresh === 'function') {
                     callPathTray.refresh();
                 }
+            }
+            return;
+        }
+
+        if (data.command === 'cursorFunctionCandidateChanged') {
+            if (callGraphTab && typeof callGraphTab.setCursorFunctionCandidate === 'function') {
+                callGraphTab.setCursorFunctionCandidate(data.functionRef);
             }
             return;
         }

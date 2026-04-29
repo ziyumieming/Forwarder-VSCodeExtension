@@ -92,8 +92,9 @@ The Call Graph tab sends `queryFunctionCallGraph` with `requestMode='call-graph'
 ### Call Graph UI Shell
 
 - The toolbar exposes only query parameters and controls: depth, direction, external-scope toggle, and Query/Fit/Layout/Clear actions.
-- The canvas shows an empty overlay until a center function is selected; no fake graph is rendered.
-- The bottom tray exposes a compact ordered list of function tags. Tags can be removed and reordered by drag-and-drop.
+- The toolbar includes a compact center pill before Query, so users can see the current center without consuming graph space.
+- The canvas shows an empty overlay until a center function is selected; it can display the current editor cursor function candidate and let the user explicitly use it as center.
+- The bottom tray exposes a compact ordered list of function tags. Tags can be removed, reordered by drag-and-drop, or right-clicked for Set as Center/Remove. The lightweight Path action lives at the end of the tray.
 - Node left-click in Call Graph mode sets the local center function. Node right-click opens actions for adding a function to the ordered path tray or selecting it as center.
 - Ordered path tags are now wired to backend path queries. Two waypoints use a direct two-endpoint shortest path. Three or more waypoints use pairwise shortest-path stitching in the user-defined order and return segment metadata for failures.
 - Class graph method clicks and the editor command `forwarder.addFunctionToCallPath` add functions to the shared tray without forcing a tab switch.

@@ -1,4 +1,4 @@
-import { IRNode, EdgeRelation, AdjacencyMap, EdgeData, FileSymbolsPayload, LineCol, NodeType } from "./GraphDefinition";
+import { IRNode, EdgeRelation, AdjacencyMap, EdgeData, FileSymbolsPayload, NodeType } from "./GraphDefinition";
 import { logger } from "../utils/logger";
 
 
@@ -438,34 +438,6 @@ export class ProjectGraph {
         return edges;
     }
 
-    public getCallEdges(nodeId: string, direction: 'incoming' | 'outgoing' | 'both' = 'both'): EdgeData[] {
-        return this.getEdges(nodeId, 'calls', direction);
-    }
-
-    public getContainingNodes(uri: string, position: LineCol, allowedTypes?: NodeType[]): IRNode[] {
-        const result: IRNode[] = [];
-
-        for (const node of this.getNodesForFile(uri, allowedTypes)) {
-            if (this.containsPosition(node.location.range, position)) {
-                result.push(node);
-            }
-        }
-
-        return result.sort((left, right) => {
-            const leftSpan = this.rangeSpan(left.location.range);
-            const rightSpan = this.rangeSpan(right.location.range);
-            if (leftSpan !== rightSpan) {
-                return leftSpan - rightSpan;
-            }
-
-            return left.name.localeCompare(right.name);
-        });
-    }
-
-    public getNodeAtLocation(uri: string, position: LineCol, allowedTypes: NodeType[] = ['function', 'method']): IRNode | undefined {
-        return this.getContainingNodes(uri, position, allowedTypes)[0];
-    }
-
     // ==========================================
     // 图数据结构维护操作：供适配层调用
     // ==========================================
@@ -488,19 +460,6 @@ export class ProjectGraph {
             this.fileNodes.set(node.location.uri, new Set());
         }
         this.fileNodes.get(node.location.uri)!.add(node.id);
-    }
-
-    private containsPosition(range: { start: LineCol; end: LineCol }, position: LineCol): boolean {
-        const afterStart = position.line > range.start.line
-            || (position.line === range.start.line && position.character >= range.start.character);
-        const beforeEnd = position.line < range.end.line
-            || (position.line === range.end.line && position.character <= range.end.character);
-        return afterStart && beforeEnd;
-    }
-
-    private rangeSpan(range: { start: LineCol; end: LineCol }): number {
-        return (range.end.line - range.start.line) * 100000
-            + (range.end.character - range.start.character);
     }
 
     /**

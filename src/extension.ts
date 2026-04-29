@@ -47,6 +47,13 @@ export function activate(context: vscode.ExtensionContext) {
 	}));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.analyze', () => analysisController.handleAnalyzeActiveFileCommand()));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.addFunctionToCallPath', () => analysisController.handleAddActiveFunctionToCallPathCommand()));
+	context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(event => {
+		analysisController.handleEditorSelectionChanged(event.textEditor);
+	}));
+	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => {
+		analysisController.handleEditorSelectionChanged(editor);
+	}));
+	analysisController.handleEditorSelectionChanged(vscode.window.activeTextEditor);
 	// Debug commands
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.analyze', () => DebugController.debugAnalyzeCurrentFile()));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.lspTypeHierarchy', () => DebugController.debugLSPTypeHierarchy()));

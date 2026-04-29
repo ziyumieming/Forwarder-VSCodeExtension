@@ -1,18 +1,8 @@
 import * as vscode from 'vscode';
 import { EdgeData, EdgeRelation, IRNode, NodeType } from '../models/GraphDefinition';
-import { LSPService } from '../services/LSPServices';
-import { SymbolRule } from '../models/SymbolRule';
+import { ResolvedSymbolInfo, SourceLocationService, SymbolCache } from '../services/SourceLocationService';
 
-export interface ResolvedSymbolInfo {
-    id: string;
-    type: NodeType;
-    name: string;
-    namespace: string;
-    uri: vscode.Uri;
-    range: vscode.Range;
-}
-
-export type SymbolCache = Map<string, vscode.DocumentSymbol[]>;
+export type { ResolvedSymbolInfo, SymbolCache };
 
 export interface ExtractionResult {
     edges: EdgeData[];
@@ -25,17 +15,7 @@ export class ExtractorUtils {
         position: vscode.Position,
         cache: SymbolCache
     ): Promise<ResolvedSymbolInfo | undefined> {
-        const uriStr = uri.toString();
-        let symbols = cache.get(uriStr);
-        if (!symbols) {
-            symbols = await LSPService.getDocumentSymbols(uri);
-            if (symbols) {
-                cache.set(uriStr, symbols);
-            }
-        }
-        if (!symbols) { return undefined; }
-
-        return this.findSymbolByPosition(symbols, uriStr, position, '');
+        return SourceLocationService.resolveSymbolInfo(uri, position, cache);
     }
 
     public static async resolveDefinitionSymbolInfo(
@@ -43,29 +23,7 @@ export class ExtractorUtils {
         position: vscode.Position,
         cache: SymbolCache
     ): Promise<ResolvedSymbolInfo | undefined> {
-        let definitions = await LSPService.getDefinition(uri, position);
-        if (!definitions || definitions.length === 0) {
-            definitions = await LSPService.getTypeDefinition(uri, position);
-        }
-
-        if (!definitions || definitions.length === 0) {
-            return undefined;
-        }
-
-        for (const def of definitions) {
-            const targetUri = 'uri' in def ? def.uri : def.targetUri;
-            const targetRange = 'range' in def ? def.range : (def.targetSelectionRange || def.targetRange);
-            if (!targetRange) {
-                continue;
-            }
-
-            const targetInfo = await this.resolveSymbolInfo(targetUri, targetRange.start, cache);
-            if (targetInfo && (targetInfo.type === 'class' || targetInfo.type === 'interface')) {
-                return targetInfo;
-            }
-        }
-
-        return undefined;
+        return SourceLocationService.resolveDefinitionSymbolInfo(uri, position, cache);
     }
 
     public static addEdgeOnce(edges: EdgeData[], sourceId: string, targetId: string, relation: EdgeRelation): boolean {
@@ -145,38 +103,4 @@ export class ExtractorUtils {
         return tail || 'Unknown';
     }
 
-    private static findSymbolByPosition(
-        symbols: vscode.DocumentSymbol[],
-        uriString: string,
-        pos: vscode.Position,
-        namespace: string
-    ): any {
-        for (const sym of symbols) {
-            if (sym.range.contains(pos)) {
-                let childNamespace = namespace;
-                const nodeType = SymbolRule.mapSymbolKindToNodeType(sym.kind);
-
-                if (nodeType || SymbolRule.isContainerSymbol(sym.kind)) {
-                    childNamespace = SymbolRule.extendNamespace(namespace, sym.name);
-                }
-
-                if (sym.children && sym.children.length > 0) {
-                    const childRes = this.findSymbolByPosition(sym.children, uriString, pos, childNamespace);
-                    if (childRes) { return childRes; }
-                }
-
-                if (nodeType) {
-                    return {
-                        id: SymbolRule.generateNodeId(uriString, nodeType, namespace, sym.name),
-                        type: nodeType,
-                        name: sym.name,
-                        namespace: namespace,
-                        uri: vscode.Uri.parse(uriString),
-                        range: sym.range
-                    };
-                }
-            }
-        }
-        return undefined;
-    }
 }

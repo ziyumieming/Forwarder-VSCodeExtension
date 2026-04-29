@@ -4,6 +4,7 @@ import { LSPService } from '../services/LSPServices';
 import { ViewQueryService } from '../services/ViewServices';
 import { AnalysisRuntime } from '../services/AnalysisRuntime';
 import { ProjectGraph } from '../models/GraphManager';
+import { SourceLocationService } from '../services/SourceLocationService';
 import { logger } from '../utils/logger';
 
 export class DebugController {
@@ -441,7 +442,9 @@ export class DebugController {
 
         try {
             const symbols = await LSPService.getDocumentSymbols(uri);
-            const callable = symbols ? this._findCallableSymbolAtPosition(symbols, cursor) : undefined;
+            const callable = symbols ? SourceLocationService.findSymbolAtPosition(symbols, cursor, {
+                allowedKinds: [vscode.SymbolKind.Function, vscode.SymbolKind.Method, vscode.SymbolKind.Constructor]
+            }) : undefined;
             const position = callable ? callable.selectionRange.start : cursor;
 
             if (callable) {
@@ -524,31 +527,6 @@ export class DebugController {
         }
 
         return result;
-    }
-
-    private static _findCallableSymbolAtPosition(symbols: vscode.DocumentSymbol[], pos: vscode.Position): vscode.DocumentSymbol | undefined {
-        for (const symbol of symbols) {
-            if (!symbol.range.contains(pos)) {
-                continue;
-            }
-
-            if (symbol.children && symbol.children.length > 0) {
-                const child = this._findCallableSymbolAtPosition(symbol.children, pos);
-                if (child) {
-                    return child;
-                }
-            }
-
-            if (
-                symbol.kind === vscode.SymbolKind.Function ||
-                symbol.kind === vscode.SymbolKind.Method ||
-                symbol.kind === vscode.SymbolKind.Constructor
-            ) {
-                return symbol;
-            }
-        }
-
-        return undefined;
     }
 
     /**

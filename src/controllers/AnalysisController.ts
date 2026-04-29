@@ -1,59 +1,36 @@
 import * as vscode from 'vscode';
-import { AnalysisRuntime } from '../services/AnalysisRuntime';
 import { AnalysisViewProvider } from '../providers/AnalysisView';
+import { AnalysisRuntime } from '../services/AnalysisRuntime';
 import { logger } from '../utils/logger';
 
 export class AnalysisController {
-    // 我们在这个控制器里持有 Runtime 的引用
     private runtime: AnalysisRuntime;
+    private cursorCandidateTimer?: ReturnType<typeof setTimeout>;
+    private cursorCandidateRequestSeq = 0;
 
     constructor(private readonly provider: AnalysisViewProvider, runtime?: AnalysisRuntime) {
         this.runtime = runtime || AnalysisRuntime.getInstance();
-
-        // 注册来自Webview的消息回调处理
         this.provider.setMessageHandler(this.handleWebviewMessage.bind(this));
     }
 
-    /**
-     * 处理从前端 AnalysisView Webview 传来的交互指令
-     */
-    private async handleWebviewMessage(data: any) {
-        //TODO: 这里的指令和数据格式需要和前端约定好，目前是示例占位
+    private async handleWebviewMessage(data: any): Promise<void> {
         switch (data.command) {
             case 'queryGlobalRelation': {
-                // 前端请求如：{ command: 'queryGlobalRelation', relations: ['extends'], includeExternal: true, __queryId: '...', __queryMode: 'global', __querySignature: '...' }
-                logger.info(`[AnalysisController] 响应全局关系查询: relations=${data.relations}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                logger.info(`[AnalysisController] queryGlobalRelation relations=${data.relations}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
                 const result = await this.runtime.queryGlobalRelation(data.relations, data.includeExternal);
-
-                // 将查询到的 {nodes, edges} 异步推回前端绘制，并携带查询标识字段供前端去重
-                this.provider.postMessage({
-                    command: 'renderGraphData',
-                    data: result,
-                    __queryId: data.__queryId,
-                    __queryMode: data.__queryMode,
-                    __querySignature: data.__querySignature
-                });
+                this.postRenderGraphData(data, result);
                 break;
             }
 
             case 'queryNodeDependencies': {
-                // 前端请求如：{ command: 'queryNodeDependencies', nodeId: 'Uri#class##MyClass', allowedRelations: ['extends', 'implements'], includeExternal: true, __queryId: '...', __queryMode: 'node', __querySignature: '...' }
-                logger.info(`[AnalysisController] 响应节点局部依赖查询: ${data.nodeId}, relations=${data.allowedRelations}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                logger.info(`[AnalysisController] queryNodeDependencies nodeId=${data.nodeId}, relations=${data.allowedRelations}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
                 const result = await this.runtime.queryNodeDependencies(data.nodeId, data.allowedRelations, data.includeExternal);
-
-                // 将查询到的 {nodes, edges} 异步推回前端绘制，并携带查询标识字段供前端去重
-                this.provider.postMessage({
-                    command: 'renderGraphData',
-                    data: result,
-                    __queryId: data.__queryId,
-                    __queryMode: data.__queryMode,
-                    __querySignature: data.__querySignature
-                });
+                this.postRenderGraphData(data, result);
                 break;
             }
 
             case 'queryFunctionCallGraph': {
-                logger.info(`[AnalysisController] 响应函数调用图查询: nodeId=${data.nodeId}, direction=${data.direction}, depth=${data.depth}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                logger.info(`[AnalysisController] queryFunctionCallGraph nodeId=${data.nodeId}, direction=${data.direction}, depth=${data.depth}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
                 const result = await this.runtime.queryFunctionCallGraph(
                     data.nodeId,
                     data.direction,
@@ -62,19 +39,12 @@ export class AnalysisController {
                     data.maxNodes,
                     data.maxEdges
                 );
-
-                this.provider.postMessage({
-                    command: 'renderGraphData',
-                    data: result,
-                    __queryId: data.__queryId,
-                    __queryMode: data.__queryMode,
-                    __querySignature: data.__querySignature
-                });
+                this.postRenderGraphData(data, result);
                 break;
             }
 
             case 'queryFunctionCallPath': {
-                logger.info(`[AnalysisController] 响应函数调用链查询: sourceId=${data.sourceId}, targetId=${data.targetId}, direction=${data.direction}, maxDepth=${data.maxDepth}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                logger.info(`[AnalysisController] queryFunctionCallPath sourceId=${data.sourceId}, targetId=${data.targetId}, direction=${data.direction}, maxDepth=${data.maxDepth}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
                 const result = await this.runtime.queryFunctionCallPath(
                     data.sourceId,
                     data.targetId,
@@ -82,70 +52,64 @@ export class AnalysisController {
                     data.maxDepth,
                     data.includeExternal
                 );
-
-                this.provider.postMessage({
-                    command: 'renderGraphData',
-                    data: result,
-                    __queryId: data.__queryId,
-                    __queryMode: data.__queryMode,
-                    __querySignature: data.__querySignature
-                });
+                this.postRenderGraphData(data, result);
                 break;
             }
 
             case 'queryFunctionCallWaypointPath': {
-                logger.info(`[AnalysisController] 响应有序函数调用链查询: nodeIds=${JSON.stringify(data.nodeIds)}, direction=${data.direction}, maxDepthPerSegment=${data.maxDepthPerSegment}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                logger.info(`[AnalysisController] queryFunctionCallWaypointPath nodeIds=${JSON.stringify(data.nodeIds)}, direction=${data.direction}, maxDepthPerSegment=${data.maxDepthPerSegment}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
                 const result = await this.runtime.queryFunctionCallWaypointPath(
                     Array.isArray(data.nodeIds) ? data.nodeIds : [],
                     data.direction,
                     data.maxDepthPerSegment,
                     data.includeExternal
                 );
-
-                this.provider.postMessage({
-                    command: 'renderGraphData',
-                    data: result,
-                    __queryId: data.__queryId,
-                    __queryMode: data.__queryMode,
-                    __querySignature: data.__querySignature
-                });
+                this.postRenderGraphData(data, result);
                 break;
             }
 
             default:
-                logger.info(`[AnalysisController] 未知的前端指令: ${data.command}`);
+                logger.info(`[AnalysisController] unknown webview command: ${data.command}`);
                 break;
         }
     }
 
-    /**
-     * TODO: 入口：对用户当前打开/激活的文件执行图分析收集
-     */
+    private postRenderGraphData(request: any, result: unknown): void {
+        this.provider.postMessage({
+            command: 'renderGraphData',
+            data: result,
+            __queryId: request.__queryId,
+            __queryMode: request.__queryMode,
+            __querySignature: request.__querySignature
+        });
+    }
+
     public async handleAnalyzeActiveFileCommand(): Promise<void> {
         const editor = vscode.window.activeTextEditor;
-        if (editor) {
-            try {
-                await this.runtime.analyzeFile(editor.document.uri);
-                vscode.window.showInformationMessage("当前文件代码结构分析完成，已存入缓存图中。");
-            } catch (error) {
-                vscode.window.showErrorMessage(`分析文件出错: ${editor.document.uri.fsPath}`);
-            }
-        } else {
-            vscode.window.showWarningMessage("未检测到活跃的编辑器文件。");
+        if (!editor) {
+            vscode.window.showWarningMessage('No active editor to analyze.');
+            return;
+        }
+
+        try {
+            await this.runtime.analyzeFile(editor.document.uri);
+            vscode.window.showInformationMessage('Analyzed active file.');
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to analyze active file: ${error}`);
         }
     }
 
     public async handleAddActiveFunctionToCallPathCommand(): Promise<void> {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
-            vscode.window.showWarningMessage('未检测到活跃的编辑器文件。');
+            vscode.window.showWarningMessage('No active editor.');
             return;
         }
 
         try {
             const functionRef = await this.runtime.resolveFunctionAtEditorPosition(editor.document.uri, editor.selection.active);
             if (!functionRef) {
-                vscode.window.showWarningMessage('当前光标不在已识别的函数或方法内。');
+                vscode.window.showWarningMessage('No function or method found at the current cursor position.');
                 return;
             }
 
@@ -154,9 +118,46 @@ export class AnalysisController {
                 command: 'addFunctionToCallPath',
                 functionRef
             });
-            vscode.window.showInformationMessage(`已加入调用链槽: ${functionRef.label}`);
+            vscode.window.showInformationMessage(`Added to call path: ${functionRef.label}`);
         } catch (error) {
-            vscode.window.showErrorMessage(`加入调用链槽失败: ${error}`);
+            vscode.window.showErrorMessage(`Failed to add function to call path: ${error}`);
         }
+    }
+
+    public handleEditorSelectionChanged(editor: vscode.TextEditor | undefined): void {
+        if (this.cursorCandidateTimer) {
+            clearTimeout(this.cursorCandidateTimer);
+        }
+
+        const requestSeq = ++this.cursorCandidateRequestSeq;
+        this.cursorCandidateTimer = setTimeout(() => {
+            this.postCursorFunctionCandidate(editor, requestSeq).catch(error => {
+                logger.info(`[AnalysisController] cursor function candidate failed: ${error}`);
+            });
+        }, 180);
+    }
+
+    private async postCursorFunctionCandidate(editor: vscode.TextEditor | undefined, requestSeq: number): Promise<void> {
+        if (requestSeq !== this.cursorCandidateRequestSeq) {
+            return;
+        }
+
+        if (!editor) {
+            this.provider.postMessage({
+                command: 'cursorFunctionCandidateChanged',
+                functionRef: undefined
+            });
+            return;
+        }
+
+        const functionRef = await this.runtime.resolveFunctionAtEditorPosition(editor.document.uri, editor.selection.active);
+        if (requestSeq !== this.cursorCandidateRequestSeq) {
+            return;
+        }
+
+        this.provider.postMessage({
+            command: 'cursorFunctionCandidateChanged',
+            functionRef
+        });
     }
 }

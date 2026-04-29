@@ -106,6 +106,7 @@
             includeExternal: false,
             hasRenderedCallGraph: false,
             contextNode: null,
+            cursorFunctionCandidate: null,
             selectionSnapshot: {
                 functions: [],
                 functionIds: []
@@ -120,12 +121,13 @@
             refs.direction = document.getElementById('call-direction');
             refs.includeExternal = document.getElementById('call-include-external');
             refs.query = document.getElementById('btn-call-query');
-            refs.pathQuery = document.getElementById('btn-call-path-query');
+            refs.centerPill = document.getElementById('call-center-pill');
             refs.fit = document.getElementById('btn-call-fit');
             refs.layout = document.getElementById('btn-call-layout');
             refs.clear = document.getElementById('btn-call-clear');
             refs.emptyOverlay = document.getElementById('call-empty-overlay');
-            refs.useSlotCenter = document.getElementById('btn-call-use-slot-center');
+            refs.emptyText = document.getElementById('call-empty-text');
+            refs.useCursorCenter = document.getElementById('btn-call-use-cursor-center');
             refs.contextMenu = document.getElementById('call-context-menu');
         }
 
@@ -150,7 +152,7 @@
         }
 
         function getCandidateCenter() {
-            return getPathSlots()[0] || null;
+            return state.cursorFunctionCandidate || getPathSlots()[0] || null;
         }
 
         function setCenterFunction(functionRef, source) {
@@ -254,7 +256,6 @@
 
             var hasCenter = !!(state.centerFunction && state.centerFunction.id);
             var candidateCenter = getCandidateCenter();
-            var pathSlots = getPathSlots();
             if (refs.depth) {
                 refs.depth.value = String(state.depth);
             }
@@ -267,14 +268,27 @@
             if (refs.query) {
                 refs.query.disabled = !hasCenter;
             }
-            if (refs.pathQuery) {
-                refs.pathQuery.disabled = pathSlots.length < 2;
-                refs.pathQuery.title = pathSlots.length < 2
-                    ? 'Add at least two functions to query a call path'
-                    : 'Query call path for ordered waypoints';
+            if (refs.centerPill) {
+                refs.centerPill.textContent = hasCenter
+                    ? (state.centerFunction.label || labelFromId(state.centerFunction.id))
+                    : 'No center';
+                refs.centerPill.title = hasCenter
+                    ? [state.centerFunction.id, state.centerFunction.meta].filter(Boolean).join('\n')
+                    : 'No center selected';
             }
-            if (refs.useSlotCenter) {
-                refs.useSlotCenter.disabled = !candidateCenter;
+            if (refs.useCursorCenter) {
+                refs.useCursorCenter.disabled = !candidateCenter;
+                refs.useCursorCenter.textContent = state.cursorFunctionCandidate
+                    ? 'Use Cursor as Center'
+                    : 'Use Path Candidate';
+                refs.useCursorCenter.title = candidateCenter
+                    ? [candidateCenter.id, candidateCenter.meta].filter(Boolean).join('\n')
+                    : 'No cursor function candidate';
+            }
+            if (refs.emptyText) {
+                refs.emptyText.textContent = candidateCenter
+                    ? 'Candidate: ' + (candidateCenter.label || labelFromId(candidateCenter.id))
+                    : 'Move the editor cursor into a function, or choose a function node as the center.';
             }
             if (refs.emptyOverlay) {
                 refs.emptyOverlay.hidden = !isActiveTab() || hasCenter || state.hasRenderedCallGraph;
@@ -345,9 +359,6 @@
             refs.query?.addEventListener('click', function () {
                 requestCenterGraph('toolbar');
             });
-            refs.pathQuery?.addEventListener('click', function () {
-                requestPathGraph('toolbar');
-            });
             refs.fit?.addEventListener('click', function () {
                 if (cy) {
                     cy.fit(undefined, 80);
@@ -364,10 +375,10 @@
                 clearCanvas('call-graph-clear');
                 updateUi();
             });
-            refs.useSlotCenter?.addEventListener('click', function () {
+            refs.useCursorCenter?.addEventListener('click', function () {
                 var candidate = getCandidateCenter();
                 if (candidate) {
-                    setCenterFunction(candidate, 'empty-overlay-slot');
+                    setCenterFunction(candidate, state.cursorFunctionCandidate ? 'empty-overlay-cursor' : 'empty-overlay-path');
                 }
             });
             refs.contextMenu?.addEventListener('click', function (event) {
@@ -457,6 +468,10 @@
             requestPathGraph: requestPathGraph,
             addPathSlot: addPathSlot,
             setCenterFunction: setCenterFunction,
+            setCursorFunctionCandidate: function (functionRef) {
+                state.cursorFunctionCandidate = cloneFunctionRef(functionRef);
+                updateUi();
+            },
             renderGraphData: function (graphData, options) {
                 state.hasRenderedCallGraph = true;
                 var requestMode = options && options.requestMode ? options.requestMode : 'call-graph';

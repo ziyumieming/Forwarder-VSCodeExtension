@@ -99,7 +99,7 @@
                 <button id="btn-call-clear" class="nav-btn">Clear</button>
             </div>
             <div class="right controls">
-                <button id="btn-call-path-query" class="nav-btn" disabled>Path</button>
+                <span id="call-center-pill" class="call-center-pill" title="No center">No center</span>
                 <button id="btn-call-query" class="nav-btn nav-btn-primary" disabled>Query</button>
             </div>
         </div>
@@ -110,8 +110,8 @@
         <div id="call-empty-overlay" class="call-empty-overlay" hidden>
             <div class="call-empty-panel">
                 <div class="call-empty-title">Select a function to inspect calls</div>
-                <div class="call-empty-text">Use a function node as the center, or choose a candidate from the path slots.</div>
-                <button id="btn-call-use-slot-center" class="nav-btn nav-btn-primary" type="button" disabled>Use as Center</button>
+                <div id="call-empty-text" class="call-empty-text">Move the editor cursor into a function, or choose a function node as the center.</div>
+                <button id="btn-call-use-cursor-center" class="nav-btn nav-btn-primary" type="button" disabled>Use Cursor as Center</button>
             </div>
         </div>
         <div id="call-context-menu" class="call-context-menu" hidden role="menu" aria-label="Call graph node actions">
@@ -124,7 +124,12 @@
                 <span id="call-path-hint" class="call-tray-hint">Add functions to define waypoint order.</span>
             </div>
             <div id="call-path-chip-list" class="call-path-chip-list" aria-label="Ordered function path"></div>
+            <button id="btn-call-tray-path-query" class="nav-btn call-path-query-btn" type="button" disabled>Path</button>
         </section>
+        <div id="call-path-chip-menu" class="call-context-menu" hidden role="menu" aria-label="Call path chip actions">
+            <button type="button" data-path-chip-action="center">Set as Center</button>
+            <button type="button" data-path-chip-action="remove">Remove</button>
+        </div>
     </main>
 
     <script nonce="{{nonce}}" src="{{cytoscapeUri}}"></script>

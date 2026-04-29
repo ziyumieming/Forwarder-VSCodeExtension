@@ -411,6 +411,22 @@ body {
     white-space: nowrap;
 }
 
+.call-center-pill {
+    max-width: min(220px, 30vw);
+    display: inline-flex;
+    align-items: center;
+    min-height: 29px;
+    padding: 5px 9px;
+    border: 1px solid rgba(154, 207, 190, 0.34);
+    border-radius: 999px;
+    color: var(--text-main);
+    background: rgba(31, 75, 67, 0.48);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .compact-option {
     gap: 4px;
 }
@@ -511,6 +527,12 @@ body {
     flex-wrap: wrap;
     max-height: 72px;
     overflow: hidden;
+    padding: 2px;
+    border-radius: 999px;
+}
+
+.call-path-chip-list.is-drag-over {
+    background: rgba(154, 207, 190, 0.08);
 }
 
 .call-path-chip {
@@ -525,10 +547,18 @@ body {
     background: rgba(31, 75, 67, 0.62);
     font-size: 11px;
     cursor: grab;
+    user-select: none;
 }
 
 .call-path-chip.is-dragging {
     opacity: 0.48;
+    cursor: grabbing;
+}
+
+.is-call-chip-dragging,
+.is-call-chip-dragging .call-path-chip,
+.is-call-chip-dragging .call-path-chip-list {
+    cursor: grabbing;
 }
 
 .call-path-chip-label {
@@ -556,6 +586,11 @@ body {
 .call-path-chip-remove:hover {
     color: #1d1403;
     background: var(--accent);
+}
+
+.call-path-query-btn {
+    flex: 0 0 auto;
+    padding-inline: 10px;
 }
 
 .call-context-menu {
