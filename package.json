@@ -23,6 +23,10 @@
         "title": "Analyze: 分析当前文件代码结构"
       },
       {
+        "command": "forwarder.addFunctionToCallPath",
+        "title": "Forwarder: Add Function to Call Path"
+      },
+      {
         "command": "forwarder.debug.analyze",
         "title": "Debug: 诊断流程通行性"
       },
@@ -73,12 +77,17 @@
           "when": "editorTextFocus",
           "command": "forwarder.analyze",
           "group": "navigation"
+        },
+        {
+          "when": "editorTextFocus",
+          "command": "forwarder.addFunctionToCallPath",
+          "group": "navigation"
         }
       ]
     },
     "keybindings": [
       {
-        "command": "forwarder.getFunction",
+        "command": "forwarder.addFunctionToCallPath",
         "key": "ctrl+alt+f",
         "when": "editorTextFocus"
       },

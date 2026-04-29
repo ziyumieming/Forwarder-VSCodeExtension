@@ -38,6 +38,13 @@ export interface EdgeData {
     relation: EdgeRelation;
 }
 
+export interface FunctionRef {
+    id: string;
+    label: string;
+    meta?: string;
+    source?: 'editor' | 'class-card' | 'call-graph';
+}
+
 // 多维邻接表别名；边的定义被嵌入Map数据结构中。
 export type AdjacencyMap = Map<string, Map<EdgeRelation, Set<string>>>;
 
@@ -57,6 +64,15 @@ export interface GraphViewData {
         direction?: 'incoming' | 'outgoing' | 'both';
         pathFound?: boolean;
         reason?: string;
+        waypointIds?: string[];
+        segments?: {
+            sourceId: string;
+            targetId: string;
+            pathFound: boolean;
+            depth: number;
+            reason?: string;
+        }[];
+        failedSegmentIndex?: number;
     };
 }
 

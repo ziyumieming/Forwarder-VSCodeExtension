@@ -6,7 +6,7 @@
         return;
     }
 
-    var selectedFunctionIds = new Set();
+    var selectedFunctions = [];
     var subscribers = [];
 
     function noop() { }
@@ -16,9 +16,61 @@
         return normalized || null;
     }
 
-    function getSnapshot() {
+    function labelFromId(nodeId) {
+        var id = String(nodeId || '').trim();
+        if (!id) {
+            return 'Unknown function';
+        }
+
+        var hashParts = id.split('#').filter(function (part) {
+            return String(part).trim().length > 0;
+        });
+        return hashParts.length > 0 ? hashParts[hashParts.length - 1] : id;
+    }
+
+    function cloneFunctionRef(functionRef) {
+        if (!functionRef) {
+            return null;
+        }
+
+        var normalizedId = normalizeId(functionRef.id !== undefined ? functionRef.id : functionRef);
+        if (!normalizedId) {
+            return null;
+        }
+
         return {
-            functionIds: Array.from(selectedFunctionIds)
+            id: normalizedId,
+            label: String(functionRef.label || labelFromId(normalizedId)),
+            meta: functionRef.meta === undefined || functionRef.meta === null ? '' : String(functionRef.meta),
+            source: functionRef.source ? String(functionRef.source) : undefined
+        };
+    }
+
+    function findIndex(nodeId) {
+        var normalized = normalizeId(nodeId);
+        if (!normalized) {
+            return -1;
+        }
+
+        for (var i = 0; i < selectedFunctions.length; i += 1) {
+            if (selectedFunctions[i].id === normalized) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    function getSnapshot() {
+        var functions = selectedFunctions.map(function (functionRef) {
+            return { ...functionRef };
+        });
+
+        return {
+            functions: functions,
+            functionRefs: functions,
+            functionIds: functions.map(function (functionRef) {
+                return functionRef.id;
+            })
         };
     }
 
@@ -30,14 +82,22 @@
         return snapshot;
     }
 
-    function add(nodeId, reason) {
-        var normalized = normalizeId(nodeId);
-        if (!normalized) {
+    function addFunction(functionRef, reason) {
+        var normalizedRef = cloneFunctionRef(functionRef);
+        if (!normalizedRef) {
             return getSnapshot();
         }
 
-        selectedFunctionIds.add(normalized);
-        return notify(reason || 'add');
+        var existingIndex = findIndex(normalizedRef.id);
+        if (existingIndex >= 0) {
+            selectedFunctions.splice(existingIndex, 1);
+        }
+        selectedFunctions.push(normalizedRef);
+        return notify(reason || 'addFunction');
+    }
+
+    function add(nodeId, reason) {
+        return addFunction({ id: nodeId }, reason || 'add');
     }
 
     function remove(nodeId, reason) {
@@ -46,7 +106,10 @@
             return getSnapshot();
         }
 
-        selectedFunctionIds.delete(normalized);
+        var existingIndex = findIndex(normalized);
+        if (existingIndex >= 0) {
+            selectedFunctions.splice(existingIndex, 1);
+        }
         return notify(reason || 'remove');
     }
 
@@ -56,21 +119,38 @@
             return getSnapshot();
         }
 
-        if (selectedFunctionIds.has(normalized)) {
-            selectedFunctionIds.delete(normalized);
+        if (findIndex(normalized) >= 0) {
+            remove(normalized, reason || 'toggle');
         } else {
-            selectedFunctionIds.add(normalized);
+            addFunction({ id: normalized }, reason || 'toggle');
         }
-
-        return notify(reason || 'toggle');
+        return getSnapshot();
     }
 
-    function clear(reason) {
-        if (selectedFunctionIds.size === 0) {
+    function move(fromIndex, toIndex, reason) {
+        var from = Number(fromIndex);
+        var to = Number(toIndex);
+        if (!Number.isInteger(from)
+            || !Number.isInteger(to)
+            || from === to
+            || from < 0
+            || to < 0
+            || from >= selectedFunctions.length
+            || to >= selectedFunctions.length) {
             return getSnapshot();
         }
 
-        selectedFunctionIds.clear();
+        var moved = selectedFunctions.splice(from, 1)[0];
+        selectedFunctions.splice(to, 0, moved);
+        return notify(reason || 'move');
+    }
+
+    function clear(reason) {
+        if (selectedFunctions.length === 0) {
+            return getSnapshot();
+        }
+
+        selectedFunctions = [];
         return notify(reason || 'clear');
     }
 
@@ -91,17 +171,18 @@
 
     modules.SelectionStore = {
         add: add,
+        addFunction: addFunction,
         remove: remove,
         toggle: toggle,
+        move: move,
         clear: clear,
         getSnapshot: getSnapshot,
         subscribe: subscribe,
         has: function (nodeId) {
-            var normalized = normalizeId(nodeId);
-            return !!normalized && selectedFunctionIds.has(normalized);
+            return findIndex(nodeId) >= 0;
         },
         reset: function () {
-            selectedFunctionIds.clear();
+            selectedFunctions = [];
             subscribers = [];
         }
     };

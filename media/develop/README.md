@@ -25,14 +25,15 @@ The Webview frontend keeps non-ESM script loading and now uses a tab shell aroun
 ### View Model
 
 - `relationGraph`: the current class/relation graph. It owns relation queries, node dependency queries, center-card behavior, and graph interaction replay.
-- `callGraph`: function call graph page shell. It owns call-specific parameter state, empty state, simple-node interactions, and the ordered path tag tray. Backend queries are intentionally not wired in this phase.
+- `callGraph`: function call graph page. It owns call-specific parameter state, empty state, simple-node interactions, center call graph queries, and path query triggers.
 - Both tabs reuse the same `#cy` Cytoscape instance. Switching tabs changes toolbar visibility and active controller, not the canvas element.
+- The ordered call path tray is shared across relationGraph and callGraph through SelectionStore, so editor commands, class-card method clicks, and call-graph node actions write to the same list.
 
 ### Script Load Order
 
 1. cytoscape library scripts
 2. base scripts: style.js -> event.js -> ui.js
-3. shared state modules: center-state.js -> tab-manager.js -> selection-store.js
+3. shared state modules: center-state.js -> tab-manager.js -> selection-store.js -> call-path-tray.js
 4. query/render/layout/card modules under media/develop/js/modules
 5. tab modules such as relation-graph-tab.js
 6. main.js bootstrap
@@ -46,7 +47,8 @@ The injection mapping is defined in src/providers/AnalysisView.ts and consumed b
 - modules/card-markup.js: class-card HTML builders
 - modules/center-state.js: center-node state + version tracking
 - modules/tab-manager.js: tab registration, activation, toolbar visibility, active tab lifecycle
-- modules/selection-store.js: cross-tab selected function id store
+- modules/selection-store.js: cross-tab ordered FunctionRef store for call path waypoints
+- modules/call-path-tray.js: shared ordered call path tray renderer and drag/drop controller
 - modules/query-service.js: query send/remember/pending response consume
 - modules/graph-incremental.js: snapshot, diff, incremental apply + fallback
 - modules/graph-pipeline.js: backend graph data -> Cytoscape elements, with `presentationMode` support
@@ -54,7 +56,7 @@ The injection mapping is defined in src/providers/AnalysisView.ts and consumed b
 - modules/card-render.js: card render orchestration
 - modules/viewport-animation.js: center viewport lock/animate helpers
 - modules/relation-graph-tab.js: relation graph queries, node interactions, replay, and stale node-response checks
-- modules/call-graph-tab.js: call graph UI state, simple-node click/context interactions, and ordered path tag tray
+- modules/call-graph-tab.js: call graph query state, simple-node click/context interactions, and center/path query dispatch
 - main.js: bootstrap, dependency wiring, shared render pipeline, backend message dispatch
 
 ### Request Modes
@@ -63,12 +65,22 @@ The injection mapping is defined in src/providers/AnalysisView.ts and consumed b
 
 - `relation-global`: relation graph global query
 - `relation-node`: relation graph node dependency query
-- `call-graph`: reserved for function call graph query
-- `call-path`: reserved for function call path query
+- `call-graph`: function call graph query
+- `call-path`: function call path query, including ordered waypoint path queries
 
 Tab code should pass `meta.requestMode` explicitly when sending queries.
 
-The Call Graph tab currently does not send `queryFunctionCallGraph` or `queryFunctionCallPath`; it only prepares UI state and local interactions. The intended next integration point is `call-graph-tab.js`, using `query-service.js` with `requestMode='call-graph'` or `requestMode='call-path'`.
+The Call Graph tab sends `queryFunctionCallGraph` with `requestMode='call-graph'`. The Path action sends `queryFunctionCallPath` for two selected waypoints and `queryFunctionCallWaypointPath` for three or more ordered waypoints with `requestMode='call-path'`.
+
+### Shared FunctionRef Store
+
+`SelectionStore` stores ordered function references:
+
+```js
+{ id, label, meta, source }
+```
+
+`getSnapshot()` returns both `functions`/`functionRefs` and the compatibility field `functionIds`. Adding a duplicate function moves it to the end, which preserves the user's most recent waypoint order. The shared tray is visible in Class Graph and Call Graph when the store is non-empty. Class-card method clicks add method refs with `source='class-card'`; editor commands add refs with `source='editor'`; call-graph context menu actions add refs with `source='call-graph'`.
 
 ### Graph Presentation Modes
 
@@ -83,8 +95,8 @@ The Call Graph tab currently does not send `queryFunctionCallGraph` or `queryFun
 - The canvas shows an empty overlay until a center function is selected; no fake graph is rendered.
 - The bottom tray exposes a compact ordered list of function tags. Tags can be removed and reordered by drag-and-drop.
 - Node left-click in Call Graph mode sets the local center function. Node right-click opens actions for adding a function to the ordered path tray or selecting it as center.
-- Ordered path tags are a frontend representation of future waypoint path queries. The current backend only supports two-endpoint shortest paths; a later backend step can query adjacent waypoints pairwise and stitch the resulting path segments.
-- Class graph member actions, editor context menu entry, shortcuts, and backend path validation are deferred to the next integration phase.
+- Ordered path tags are now wired to backend path queries. Two waypoints use a direct two-endpoint shortest path. Three or more waypoints use pairwise shortest-path stitching in the user-defined order and return segment metadata for failures.
+- Class graph method clicks and the editor command `forwarder.addFunctionToCallPath` add functions to the shared tray without forcing a tab switch.
 
 ## Consistency Guardrails
 

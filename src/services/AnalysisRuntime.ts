@@ -4,7 +4,8 @@ import { AdapterService } from './AdapterServices';
 import { CallGraphDirection, ViewQueryService } from './ViewServices';
 import { SynchronizationService } from './SynchronizationServices';
 import { GatingService } from './GatingServices';
-import { EdgeRelation, GraphViewData } from '../models/GraphDefinition';
+import { EdgeRelation, FunctionRef, GraphViewData, IRNode, LineCol } from '../models/GraphDefinition';
+import { LSPService } from './LSPServices';
 import { logger } from '../utils/logger';
 
 export interface AnalysisTask {
@@ -479,6 +480,51 @@ export class AnalysisRuntime {
         });
     }
 
+    public async queryFunctionCallWaypointPath(
+        nodeIds: string[],
+        direction?: CallGraphDirection,
+        maxDepthPerSegment?: number,
+        includeExternal?: boolean
+    ): Promise<GraphViewData> {
+        await this.readyPromise;
+        await this.waitForQueueIdle(this.analysisGeneration);
+        return ViewQueryService.queryFunctionCallWaypointPath(this.projectGraph, nodeIds, {
+            direction,
+            maxDepthPerSegment,
+            includeExternal
+        });
+    }
+
+    public async resolveFunctionAtEditorPosition(uri: vscode.Uri, position: vscode.Position): Promise<FunctionRef | undefined> {
+        await this.readyPromise;
+        await this.waitForQueueIdle(this.analysisGeneration);
+
+        const uriString = uri.toString();
+        const lineCol: LineCol = { line: position.line, character: position.character };
+        const graphNode = this.projectGraph.getNodeAtLocation(uriString, lineCol, ['function', 'method']);
+        if (graphNode) {
+            return this.toFunctionRef(graphNode, 'editor');
+        }
+
+        const symbols = await LSPService.getDocumentSymbols(uri);
+        const callable = symbols ? this.findCallableSymbolAtPosition(symbols, position) : undefined;
+        if (!callable) {
+            return undefined;
+        }
+
+        const callableStart: LineCol = {
+            line: callable.range.start.line,
+            character: callable.range.start.character
+        };
+        const matchingGraphNode = this.projectGraph
+            .getNodesForFile(uriString, ['function', 'method'])
+            .find(node => node.name === callable.name
+                && node.location.range.start.line === callableStart.line
+                && node.location.range.start.character === callableStart.character);
+
+        return matchingGraphNode ? this.toFunctionRef(matchingGraphNode, 'editor') : undefined;
+    }
+
     /**
      * 公共接口：清空图并重建
      * 用于用户主动触发的完整图重置和重新扫描场景
@@ -555,6 +601,41 @@ export class AnalysisRuntime {
         this.readyPromise = new Promise((resolve) => {
             this.resolveReady = resolve;
         });
+    }
+
+    private toFunctionRef(node: IRNode, source: FunctionRef['source']): FunctionRef {
+        return {
+            id: node.id,
+            label: node.signature || node.name,
+            meta: node.namespace || this.summarizeUri(node.location.uri),
+            source
+        };
+    }
+
+    private summarizeUri(uri: string): string {
+        const parts = uri.replace(/\\/g, '/').split('/').filter(part => part.length > 0);
+        return parts.length > 0 ? parts[parts.length - 1] : uri;
+    }
+
+    private findCallableSymbolAtPosition(symbols: vscode.DocumentSymbol[], position: vscode.Position): vscode.DocumentSymbol | undefined {
+        for (const symbol of symbols) {
+            if (!symbol.range.contains(position)) {
+                continue;
+            }
+
+            if (symbol.children && symbol.children.length > 0) {
+                const child = this.findCallableSymbolAtPosition(symbol.children, position);
+                if (child) {
+                    return child;
+                }
+            }
+
+            if (symbol.kind === vscode.SymbolKind.Function || symbol.kind === vscode.SymbolKind.Method) {
+                return symbol;
+            }
+        }
+
+        return undefined;
     }
 
     /**

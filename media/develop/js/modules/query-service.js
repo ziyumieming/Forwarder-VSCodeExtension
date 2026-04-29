@@ -33,7 +33,7 @@
             return 'call-graph';
         }
 
-        if (command === 'queryFunctionCallPath') {
+        if (command === 'queryFunctionCallPath' || command === 'queryFunctionCallWaypointPath') {
             return 'call-path';
         }
 

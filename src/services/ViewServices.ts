@@ -16,6 +16,7 @@ export interface FunctionCallPathOptions {
     direction?: CallGraphDirection;
     includeExternal?: boolean;
     maxDepth?: number;
+    maxDepthPerSegment?: number;
     maxNodes?: number;
 }
 
@@ -150,7 +151,7 @@ export class ViewQueryService {
                 continue;
             }
 
-            const nextEdges = this.getCallEdgesForDirection(graph, current.id, direction);
+            const nextEdges = graph.getCallEdges(current.id, direction);
             for (const edge of nextEdges) {
                 const source = graph.getNode(edge.sourceId);
                 const target = graph.getNode(edge.targetId);
@@ -249,7 +250,7 @@ export class ViewQueryService {
                 continue;
             }
 
-            const nextEdges = this.getCallEdgesForDirection(graph, current.id, direction);
+            const nextEdges = graph.getCallEdges(current.id, direction);
             for (const edge of nextEdges) {
                 const nextNodeId = edge.sourceId === current.id ? edge.targetId : edge.sourceId;
                 const nextNode = graph.getNode(nextNodeId);
@@ -325,6 +326,111 @@ export class ViewQueryService {
         };
     }
 
+    public static queryFunctionCallWaypointPath(
+        graph: ProjectGraph,
+        nodeIds: string[],
+        options: FunctionCallPathOptions = {}
+    ): GraphViewData {
+        const direction = this.normalizeDirection(options.direction, 'outgoing');
+        const maxDepthPerSegment = this.normalizePositiveInteger(
+            options.maxDepthPerSegment ?? options.maxDepth,
+            8,
+            0,
+            50
+        );
+        const includeExternal = options.includeExternal === true;
+        const waypointIds = Array.isArray(nodeIds)
+            ? nodeIds.map(id => String(id)).filter(id => id.length > 0)
+            : [];
+
+        if (waypointIds.length < 2) {
+            const nodes = graph.getNodes(waypointIds);
+            return {
+                nodes,
+                edges: [],
+                meta: {
+                    pathFound: false,
+                    direction,
+                    depth: 0,
+                    waypointIds,
+                    segments: [],
+                    reason: 'insufficient-waypoints'
+                }
+            };
+        }
+
+        const nodeMap = new Map<string, IRNode>();
+        const edgeMap = new Map<string, EdgeData>();
+        const segments: NonNullable<GraphViewData['meta']>['segments'] = [];
+        let pathFound = true;
+        let truncated = false;
+        let failedSegmentIndex: number | undefined;
+
+        for (const waypointId of waypointIds) {
+            const node = graph.getNode(waypointId);
+            if (node) {
+                nodeMap.set(node.id, node);
+            }
+        }
+
+        for (let index = 0; index < waypointIds.length - 1; index += 1) {
+            const sourceId = waypointIds[index];
+            const targetId = waypointIds[index + 1];
+            const segmentResult = this.queryFunctionCallPath(graph, sourceId, targetId, {
+                direction,
+                maxDepth: maxDepthPerSegment,
+                includeExternal,
+                maxNodes: options.maxNodes
+            });
+
+            for (const node of segmentResult.nodes) {
+                nodeMap.set(node.id, node);
+            }
+            for (const edge of segmentResult.edges) {
+                edgeMap.set(this.getEdgeKey(edge), edge);
+            }
+
+            const segmentFound = segmentResult.meta?.pathFound === true;
+            const segmentDepth = Number(segmentResult.meta?.depth ?? segmentResult.edges.length);
+            const segmentReason = segmentResult.meta?.reason;
+            segments.push({
+                sourceId,
+                targetId,
+                pathFound: segmentFound,
+                depth: Number.isFinite(segmentDepth) ? segmentDepth : segmentResult.edges.length,
+                ...(segmentReason ? { reason: segmentReason } : {})
+            });
+
+            if (segmentResult.meta?.truncated) {
+                truncated = true;
+            }
+
+            if (!segmentFound) {
+                pathFound = false;
+                failedSegmentIndex = index;
+                break;
+            }
+        }
+
+        const nodes = this.filterNodesForExternal(Array.from(nodeMap.values()), waypointIds[0], includeExternal);
+        const validNodeIds = new Set(nodes.map(node => node.id));
+        const edges = Array.from(edgeMap.values()).filter(edge => validNodeIds.has(edge.sourceId) && validNodeIds.has(edge.targetId));
+
+        return {
+            nodes,
+            edges,
+            meta: {
+                pathFound,
+                truncated,
+                direction,
+                depth: edges.length,
+                waypointIds,
+                segments,
+                ...(failedSegmentIndex !== undefined ? { failedSegmentIndex } : {})
+            }
+        };
+    }
+
     /**
      * 检验提取出的 Nodes 中是否完整的包含了 Edges 的源/目标端点。如果缺失则输出警告。
      */
@@ -346,36 +452,6 @@ export class ViewQueryService {
         if (hangingEdgesCount > 0) {
             logger.warn(`[ViewQueryService] ${contextTag} 发现 ${hangingEdgesCount} 条悬空边（缺少源或目标节点）`);
         }
-    }
-
-    private static getCallEdgesForDirection(graph: ProjectGraph, nodeId: string, direction: CallGraphDirection): EdgeData[] {
-        if (direction === 'outgoing') {
-            return this.getOutgoingCallEdges(graph, nodeId);
-        }
-
-        if (direction === 'incoming') {
-            return this.getIncomingCallEdges(graph, nodeId);
-        }
-
-        return [...this.getOutgoingCallEdges(graph, nodeId), ...this.getIncomingCallEdges(graph, nodeId)];
-    }
-
-    private static getOutgoingCallEdges(graph: ProjectGraph, nodeId: string): EdgeData[] {
-        const targets = graph.outEdges.get(nodeId)?.get('calls');
-        if (!targets) {
-            return [];
-        }
-
-        return Array.from(targets).map(targetId => ({ sourceId: nodeId, targetId, relation: 'calls' }));
-    }
-
-    private static getIncomingCallEdges(graph: ProjectGraph, nodeId: string): EdgeData[] {
-        const sources = graph.inEdges.get(nodeId)?.get('calls');
-        if (!sources) {
-            return [];
-        }
-
-        return Array.from(sources).map(sourceId => ({ sourceId, targetId: nodeId, relation: 'calls' }));
     }
 
     private static filterNodesForExternal(nodes: IRNode[], centerNodeId: string, includeExternal: boolean): IRNode[] {

@@ -93,6 +93,25 @@ export class AnalysisController {
                 break;
             }
 
+            case 'queryFunctionCallWaypointPath': {
+                logger.info(`[AnalysisController] 响应有序函数调用链查询: nodeIds=${JSON.stringify(data.nodeIds)}, direction=${data.direction}, maxDepthPerSegment=${data.maxDepthPerSegment}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                const result = await this.runtime.queryFunctionCallWaypointPath(
+                    Array.isArray(data.nodeIds) ? data.nodeIds : [],
+                    data.direction,
+                    data.maxDepthPerSegment,
+                    data.includeExternal
+                );
+
+                this.provider.postMessage({
+                    command: 'renderGraphData',
+                    data: result,
+                    __queryId: data.__queryId,
+                    __queryMode: data.__queryMode,
+                    __querySignature: data.__querySignature
+                });
+                break;
+            }
+
             default:
                 logger.info(`[AnalysisController] 未知的前端指令: ${data.command}`);
                 break;
@@ -113,6 +132,31 @@ export class AnalysisController {
             }
         } else {
             vscode.window.showWarningMessage("未检测到活跃的编辑器文件。");
+        }
+    }
+
+    public async handleAddActiveFunctionToCallPathCommand(): Promise<void> {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage('未检测到活跃的编辑器文件。');
+            return;
+        }
+
+        try {
+            const functionRef = await this.runtime.resolveFunctionAtEditorPosition(editor.document.uri, editor.selection.active);
+            if (!functionRef) {
+                vscode.window.showWarningMessage('当前光标不在已识别的函数或方法内。');
+                return;
+            }
+
+            await vscode.commands.executeCommand('workbench.view.extension.forwarder-sidebar');
+            this.provider.postMessage({
+                command: 'addFunctionToCallPath',
+                functionRef
+            });
+            vscode.window.showInformationMessage(`已加入调用链槽: ${functionRef.label}`);
+        } catch (error) {
+            vscode.window.showErrorMessage(`加入调用链槽失败: ${error}`);
         }
     }
 }

@@ -64,7 +64,21 @@
         return {
             id: id,
             label: firstNonBlank(data.baseLabel, data.label, data.name, labelFromId(id)),
-            meta: firstNonBlank(data.namespace, summarizeUri(data.uri), nodeKind)
+            meta: firstNonBlank(data.namespace, summarizeUri(data.uri), nodeKind),
+            source: 'call-graph'
+        };
+    }
+
+    function cloneFunctionRef(functionRef) {
+        if (!functionRef || !functionRef.id) {
+            return null;
+        }
+
+        return {
+            id: String(functionRef.id),
+            label: firstNonBlank(functionRef.label, labelFromId(functionRef.id)),
+            meta: firstNonBlank(functionRef.meta),
+            source: firstNonBlank(functionRef.source)
         };
     }
 
@@ -72,21 +86,30 @@
         var safeContext = context || {};
         var cy = safeContext.cy;
         var selectionStore = safeContext.selectionStore;
+        var queryService = safeContext.queryService;
+        var postMessage = typeof safeContext.postMessage === 'function' ? safeContext.postMessage : null;
         var log = typeof safeContext.log === 'function' ? safeContext.log : noop;
         var clearCanvas = typeof safeContext.clearCanvas === 'function' ? safeContext.clearCanvas : noop;
         var renderGraphData = typeof safeContext.renderGraphData === 'function' ? safeContext.renderGraphData : noop;
         var isActiveTab = typeof safeContext.isActiveTab === 'function' ? safeContext.isActiveTab : function () { return false; };
+        var getQueryDebounceWindowMs = typeof safeContext.getQueryDebounceWindowMs === 'function'
+            ? safeContext.getQueryDebounceWindowMs
+            : function () { return 80; };
+        var getQueryDuplicateWindowMs = typeof safeContext.getQueryDuplicateWindowMs === 'function'
+            ? safeContext.getQueryDuplicateWindowMs
+            : function () { return 220; };
 
         var state = {
             centerFunction: null,
             depth: 2,
             direction: 'both',
             includeExternal: false,
-            pathSlots: [],
-            selectionCandidates: [],
             hasRenderedCallGraph: false,
             contextNode: null,
-            draggingSlotIndex: null
+            selectionSnapshot: {
+                functions: [],
+                functionIds: []
+            }
         };
 
         var refs = {};
@@ -97,41 +120,37 @@
             refs.direction = document.getElementById('call-direction');
             refs.includeExternal = document.getElementById('call-include-external');
             refs.query = document.getElementById('btn-call-query');
+            refs.pathQuery = document.getElementById('btn-call-path-query');
             refs.fit = document.getElementById('btn-call-fit');
             refs.layout = document.getElementById('btn-call-layout');
             refs.clear = document.getElementById('btn-call-clear');
             refs.emptyOverlay = document.getElementById('call-empty-overlay');
             refs.useSlotCenter = document.getElementById('btn-call-use-slot-center');
-            refs.tray = document.getElementById('call-path-tray');
             refs.contextMenu = document.getElementById('call-context-menu');
-            refs.chipList = document.getElementById('call-path-chip-list');
-            refs.pathHint = document.getElementById('call-path-hint');
         }
 
-        function cloneFunctionRef(functionRef) {
-            if (!functionRef || !functionRef.id) {
-                return null;
+        function getPathSlots() {
+            var snapshot = state.selectionSnapshot || {};
+            if (Array.isArray(snapshot.functions)) {
+                return snapshot.functions;
             }
-
-            return {
-                id: String(functionRef.id),
-                label: firstNonBlank(functionRef.label, labelFromId(functionRef.id)),
-                meta: firstNonBlank(functionRef.meta)
-            };
+            if (Array.isArray(snapshot.functionRefs)) {
+                return snapshot.functionRefs;
+            }
+            if (Array.isArray(snapshot.functionIds)) {
+                return snapshot.functionIds.map(function (id) {
+                    return {
+                        id: String(id),
+                        label: labelFromId(id),
+                        meta: ''
+                    };
+                });
+            }
+            return [];
         }
 
         function getCandidateCenter() {
-            return state.pathSlots[0] || state.selectionCandidates[0] || null;
-        }
-
-        function findSlotIndex(nodeId) {
-            var normalizedId = String(nodeId || '');
-            for (var i = 0; i < state.pathSlots.length; i += 1) {
-                if (state.pathSlots[i] && state.pathSlots[i].id === normalizedId) {
-                    return i;
-                }
-            }
-            return -1;
+            return getPathSlots()[0] || null;
         }
 
         function setCenterFunction(functionRef, source) {
@@ -151,90 +170,81 @@
                 return;
             }
 
-            var existingIndex = findSlotIndex(normalizedRef.id);
-            if (existingIndex >= 0) {
-                state.pathSlots.splice(existingIndex, 1);
-            }
-            state.pathSlots.push(normalizedRef);
-            updateUi();
-        }
-
-        function removePathSlot(index) {
-            if (index < 0 || index >= state.pathSlots.length) {
+            if (selectionStore && typeof selectionStore.addFunction === 'function') {
+                selectionStore.addFunction({
+                    ...normalizedRef,
+                    source: normalizedRef.source || 'call-graph'
+                }, 'call-graph-add');
                 return;
             }
 
-            state.pathSlots.splice(index, 1);
-            updateUi();
+            log('state', 'error', 'selection store missing addFunction', {});
         }
 
-        function movePathSlot(fromIndex, toIndex) {
-            if (fromIndex === toIndex
-                || fromIndex < 0
-                || toIndex < 0
-                || fromIndex >= state.pathSlots.length
-                || toIndex >= state.pathSlots.length) {
-                return;
+        function sendQuery(command, payload, requestMode) {
+            if (!queryService || typeof queryService.sendQuery !== 'function' || !postMessage) {
+                log('query', 'error', 'call graph query service unavailable', {
+                    command: command,
+                    requestMode: requestMode
+                });
+                return null;
             }
 
-            var moved = state.pathSlots.splice(fromIndex, 1)[0];
-            state.pathSlots.splice(toIndex, 0, moved);
-            updateUi();
-        }
-
-        function renderPathChips() {
-            if (!refs.chipList) {
-                return;
-            }
-
-            refs.chipList.textContent = '';
-            state.pathSlots.forEach(function (slot, index) {
-                var chip = document.createElement('span');
-                chip.className = 'call-path-chip';
-                chip.draggable = true;
-                chip.dataset.slotIndex = String(index);
-                chip.title = slot.id;
-
-                var label = document.createElement('span');
-                label.className = 'call-path-chip-label';
-                label.textContent = slot.label || labelFromId(slot.id);
-                chip.appendChild(label);
-
-                var removeButton = document.createElement('button');
-                removeButton.type = 'button';
-                removeButton.className = 'call-path-chip-remove';
-                removeButton.dataset.slotRemoveIndex = String(index);
-                removeButton.setAttribute('aria-label', 'Remove ' + (slot.label || slot.id));
-                removeButton.textContent = 'x';
-                chip.appendChild(removeButton);
-
-                chip.addEventListener('dragstart', function (event) {
-                    state.draggingSlotIndex = index;
-                    chip.classList.add('is-dragging');
-                    if (event.dataTransfer) {
-                        event.dataTransfer.effectAllowed = 'move';
-                        event.dataTransfer.setData('text/plain', slot.id);
-                    }
-                });
-                chip.addEventListener('dragend', function () {
-                    chip.classList.remove('is-dragging');
-                    state.draggingSlotIndex = null;
-                });
-                chip.addEventListener('dragover', function (event) {
-                    event.preventDefault();
-                    if (event.dataTransfer) {
-                        event.dataTransfer.dropEffect = 'move';
-                    }
-                });
-                chip.addEventListener('drop', function (event) {
-                    event.preventDefault();
-                    if (Number.isInteger(state.draggingSlotIndex)) {
-                        movePathSlot(state.draggingSlotIndex, index);
-                    }
-                });
-
-                refs.chipList.appendChild(chip);
+            return queryService.sendQuery({
+                command: command,
+                payload: payload,
+                postMessage: postMessage,
+                log: log,
+                debounceWindowMs: getQueryDebounceWindowMs(),
+                duplicateWindowMs: getQueryDuplicateWindowMs(),
+                meta: {
+                    requestMode: requestMode
+                }
             });
+        }
+
+        function requestCenterGraph(source) {
+            if (!state.centerFunction || !state.centerFunction.id) {
+                log('query', 'info', 'skip call graph query without center', { source: source || 'unknown' });
+                return null;
+            }
+
+            return sendQuery('queryFunctionCallGraph', {
+                nodeId: state.centerFunction.id,
+                direction: state.direction || 'both',
+                depth: state.depth || 2,
+                includeExternal: !!state.includeExternal,
+                maxNodes: 100,
+                maxEdges: 300
+            }, 'call-graph');
+        }
+
+        function requestPathGraph(source) {
+            var pathSlots = getPathSlots();
+            if (pathSlots.length < 2) {
+                log('query', 'info', 'skip call path query without enough waypoints', {
+                    source: source || 'unknown',
+                    waypointCount: pathSlots.length
+                });
+                return null;
+            }
+
+            if (pathSlots.length === 2) {
+                return sendQuery('queryFunctionCallPath', {
+                    sourceId: pathSlots[0].id,
+                    targetId: pathSlots[1].id,
+                    direction: 'outgoing',
+                    maxDepth: 8,
+                    includeExternal: !!state.includeExternal
+                }, 'call-path');
+            }
+
+            return sendQuery('queryFunctionCallWaypointPath', {
+                nodeIds: pathSlots.map(function (slot) { return slot.id; }),
+                direction: 'outgoing',
+                maxDepthPerSegment: 8,
+                includeExternal: !!state.includeExternal
+            }, 'call-path');
         }
 
         function updateUi() {
@@ -244,6 +254,7 @@
 
             var hasCenter = !!(state.centerFunction && state.centerFunction.id);
             var candidateCenter = getCandidateCenter();
+            var pathSlots = getPathSlots();
             if (refs.depth) {
                 refs.depth.value = String(state.depth);
             }
@@ -256,22 +267,18 @@
             if (refs.query) {
                 refs.query.disabled = !hasCenter;
             }
+            if (refs.pathQuery) {
+                refs.pathQuery.disabled = pathSlots.length < 2;
+                refs.pathQuery.title = pathSlots.length < 2
+                    ? 'Add at least two functions to query a call path'
+                    : 'Query call path for ordered waypoints';
+            }
             if (refs.useSlotCenter) {
                 refs.useSlotCenter.disabled = !candidateCenter;
             }
             if (refs.emptyOverlay) {
                 refs.emptyOverlay.hidden = !isActiveTab() || hasCenter || state.hasRenderedCallGraph;
             }
-            if (refs.tray) {
-                refs.tray.hidden = !isActiveTab();
-            }
-            if (refs.pathHint) {
-                refs.pathHint.textContent = state.pathSlots.length > 0
-                    ? state.pathSlots.length + ' waypoint' + (state.pathSlots.length === 1 ? '' : 's') + ' selected. Drag to reorder.'
-                    : 'Add functions to define waypoint order.';
-            }
-
-            renderPathChips();
         }
 
         function hideContextMenu() {
@@ -336,13 +343,10 @@
                 updateUi();
             });
             refs.query?.addEventListener('click', function () {
-                log('query', 'info', 'call graph query placeholder clicked', {
-                    centerFunctionId: state.centerFunction ? state.centerFunction.id : null,
-                    depth: state.depth,
-                    direction: state.direction,
-                    includeExternal: state.includeExternal,
-                    waypointIds: state.pathSlots.map(function (slot) { return slot.id; })
-                });
+                requestCenterGraph('toolbar');
+            });
+            refs.pathQuery?.addEventListener('click', function () {
+                requestPathGraph('toolbar');
             });
             refs.fit?.addEventListener('click', function () {
                 if (cy) {
@@ -372,17 +376,6 @@
                     handleContextAction(action);
                 }
             });
-            refs.chipList?.addEventListener('click', function (event) {
-                var rawIndex = event.target && event.target.dataset ? event.target.dataset.slotRemoveIndex : null;
-                if (rawIndex === undefined || rawIndex === null) {
-                    return;
-                }
-
-                var index = Number(rawIndex);
-                if (Number.isInteger(index)) {
-                    removePathSlot(index);
-                }
-            });
             document.addEventListener('click', function (event) {
                 if (!refs.contextMenu || refs.contextMenu.hidden) {
                     return;
@@ -395,19 +388,10 @@
 
             if (selectionStore && typeof selectionStore.subscribe === 'function') {
                 unsubscribeSelection = selectionStore.subscribe(function (snapshot) {
-                    var ids = Array.isArray(snapshot?.functionIds) ? snapshot.functionIds : [];
-                    state.selectionCandidates = ids.map(function (id) {
-                        return {
-                            id: String(id),
-                            label: labelFromId(id),
-                            meta: ''
-                        };
-                    });
-                    if (state.pathSlots.length === 0 && state.selectionCandidates.length > 0) {
-                        state.pathSlots = state.selectionCandidates.map(cloneFunctionRef).filter(function (slot) {
-                            return !!slot;
-                        });
-                    }
+                    state.selectionSnapshot = snapshot || {
+                        functions: [],
+                        functionIds: []
+                    };
                     updateUi();
                 });
             }
@@ -460,9 +444,6 @@
             if (refs.emptyOverlay) {
                 refs.emptyOverlay.hidden = true;
             }
-            if (refs.tray) {
-                refs.tray.hidden = true;
-            }
         }
 
         return {
@@ -472,10 +453,18 @@
             onActivate: activate,
             onReactivate: activate,
             onDeactivate: deactivate,
-            renderGraphData: function (graphData) {
+            requestCenterGraph: requestCenterGraph,
+            requestPathGraph: requestPathGraph,
+            addPathSlot: addPathSlot,
+            setCenterFunction: setCenterFunction,
+            renderGraphData: function (graphData, options) {
                 state.hasRenderedCallGraph = true;
+                var requestMode = options && options.requestMode ? options.requestMode : 'call-graph';
                 renderGraphData(graphData, {
-                    currentCenterNodeId: state.centerFunction ? state.centerFunction.id : null
+                    ...(options || {}),
+                    currentCenterNodeId: requestMode === 'call-path'
+                        ? null
+                        : (state.centerFunction ? state.centerFunction.id : null)
                 });
                 updateUi();
             },
@@ -490,7 +479,7 @@
                     depth: state.depth,
                     direction: state.direction,
                     includeExternal: state.includeExternal,
-                    pathSlots: state.pathSlots.map(function (slot) { return { ...slot }; })
+                    pathSlots: getPathSlots().map(function (slot) { return { ...slot }; })
                 };
             }
         };

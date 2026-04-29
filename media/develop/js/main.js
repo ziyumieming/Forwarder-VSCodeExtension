@@ -36,6 +36,7 @@
     const centerStateModule = window.AnalysisModules?.CenterState;
     const tabManagerModule = window.AnalysisModules?.TabManager;
     const selectionStoreModule = window.AnalysisModules?.SelectionStore;
+    const callPathTrayModule = window.AnalysisModules?.CallPathTray;
     const queryServiceModule = window.AnalysisModules?.QueryService;
     const graphIncrementalModule = window.AnalysisModules?.GraphIncremental;
     const graphPipelineModule = window.AnalysisModules?.GraphPipeline;
@@ -46,6 +47,7 @@
     const callGraphTabModule = window.AnalysisModules?.CallGraphTab;
     let relationGraphTab = null;
     let callGraphTab = null;
+    let callPathTray = null;
 
     if (graphIncrementalModule && typeof graphIncrementalModule.createEmptyGraphSnapshot === 'function') {
         latestGraphSnapshot = graphIncrementalModule.createEmptyGraphSnapshot();
@@ -429,6 +431,17 @@
                 });
             },
             onMemberClick: (item) => {
+                if (item.dataset.memberKind === 'method'
+                    && item.dataset.memberId
+                    && selectionStoreModule
+                    && typeof selectionStoreModule.addFunction === 'function') {
+                    selectionStoreModule.addFunction({
+                        id: item.dataset.memberId,
+                        label: item.dataset.memberLabel || item.dataset.memberId,
+                        meta: item.dataset.nodeId || '',
+                        source: 'class-card'
+                    }, 'class-card-member-click');
+                }
                 dispatchCardCommand('classCardMemberClick', {
                     nodeId: item.dataset.nodeId,
                     memberKind: item.dataset.memberKind,
@@ -801,6 +814,20 @@
         }
     }
 
+    if (callPathTrayModule && typeof callPathTrayModule.create === 'function') {
+        callPathTray = callPathTrayModule.create({
+            selectionStore: selectionStoreModule,
+            log,
+            getActiveTabId: () => tabManagerModule && typeof tabManagerModule.getActiveTabId === 'function'
+                ? tabManagerModule.getActiveTabId()
+                : 'relationGraph'
+        });
+
+        if (typeof callPathTray.bind === 'function') {
+            callPathTray.bind();
+        }
+    }
+
     if (relationGraphTabModule && typeof relationGraphTabModule.create === 'function') {
         relationGraphTab = relationGraphTabModule.create({
             cy,
@@ -860,13 +887,17 @@
         callGraphTab = callGraphTabModule.create({
             cy,
             selectionStore: selectionStoreModule,
+            queryService: queryServiceModule,
             log,
+            postMessage: (message) => vscode.postMessage(message),
             clearCanvas,
             renderGraphData: (graphData, options = {}) => renderGraphData(graphData, {
                 ...options,
                 presentationMode: 'simple-node',
-                requestMode: 'call-graph'
+                requestMode: options.requestMode || 'call-graph'
             }),
+            getQueryDebounceWindowMs,
+            getQueryDuplicateWindowMs,
             isActiveTab: () => tabManagerModule
                 && typeof tabManagerModule.getActiveTabId === 'function'
                 && tabManagerModule.getActiveTabId() === 'callGraph'
@@ -919,6 +950,18 @@
             latestQueryIdForMode
         });
 
+        if (data.command === 'addFunctionToCallPath') {
+            if (data.functionRef
+                && selectionStoreModule
+                && typeof selectionStoreModule.addFunction === 'function') {
+                selectionStoreModule.addFunction(data.functionRef, 'editor-command');
+                if (callPathTray && typeof callPathTray.refresh === 'function') {
+                    callPathTray.refresh();
+                }
+            }
+            return;
+        }
+
         if (data.command === 'renderGraphData') {
             if (droppedByLatestWin) {
                 log('query', 'info', 'drop stale response by latest-win', {
@@ -931,10 +974,12 @@
                 return;
             }
 
-            if (responseRequestMode === 'call-graph'
+            if ((responseRequestMode === 'call-graph' || responseRequestMode === 'call-path')
                 && callGraphTab
                 && typeof callGraphTab.renderGraphData === 'function') {
-                callGraphTab.renderGraphData(data.data);
+                callGraphTab.renderGraphData(data.data, {
+                    requestMode: responseRequestMode
+                });
                 return;
             }
 
@@ -984,6 +1029,13 @@
     if (tabManagerModule && typeof tabManagerModule.register === 'function') {
         tabManagerModule.register('relationGraph', relationGraphTab || {});
         tabManagerModule.register('callGraph', callGraphTab || {});
+        if (callPathTray
+            && typeof callPathTray.refresh === 'function'
+            && typeof tabManagerModule.subscribe === 'function') {
+            tabManagerModule.subscribe(() => {
+                callPathTray.refresh();
+            });
+        }
         tabManagerModule.activate('relationGraph', 'startup');
     }
 
