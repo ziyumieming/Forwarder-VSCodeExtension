@@ -4,7 +4,7 @@ import { AdapterService } from './AdapterServices';
 import { CallGraphDirection, ViewQueryService } from './ViewServices';
 import { SynchronizationService } from './SynchronizationServices';
 import { GatingService } from './GatingServices';
-import { EdgeRelation, FunctionRef, GraphViewData } from '../models/GraphDefinition';
+import { AnalysisIndexStatus, EdgeRelation, FunctionRef, GraphViewData } from '../models/GraphDefinition';
 import { SourceLocationService } from './SourceLocationService';
 import { logger } from '../utils/logger';
 
@@ -39,14 +39,16 @@ export class AnalysisRuntime {
     private analysisGeneration: number = 0;
     private queueIdleResolvers: (() => void)[] = [];
 
-    // 后端就绪状态阻塞原语
-    private readyPromise: Promise<void>;
-    private resolveReady!: () => void;
+    // 快照加载完成后即可响应查询；后续队列更新通过 stale 状态提示前端。
+    private snapshotReadyPromise: Promise<void>;
+    private resolveSnapshotReady!: () => void;
+    private snapshotReady: boolean = false;
+    private indexStatusListeners: Set<(status: AnalysisIndexStatus) => void> = new Set();
 
     private constructor() {
         this.projectGraph = new ProjectGraph();
-        this.readyPromise = new Promise((resolve) => {
-            this.resolveReady = resolve;
+        this.snapshotReadyPromise = new Promise((resolve) => {
+            this.resolveSnapshotReady = resolve;
         });
     }
 
@@ -55,6 +57,55 @@ export class AnalysisRuntime {
             AnalysisRuntime.instance = new AnalysisRuntime();
         }
         return AnalysisRuntime.instance;
+    }
+
+    public onIndexStatusChanged(listener: (status: AnalysisIndexStatus) => void): vscode.Disposable {
+        this.indexStatusListeners.add(listener);
+        listener(this.getIndexStatus());
+        return new vscode.Disposable(() => {
+            this.indexStatusListeners.delete(listener);
+        });
+    }
+
+    public getIndexStatus(overrides: Partial<AnalysisIndexStatus> = {}): AnalysisIndexStatus {
+        const status: AnalysisIndexStatus = {
+            snapshotReady: this.snapshotReady,
+            isUpdating: this.isProcessing || this.taskQueue.length > 0 || !!this.activeTask,
+            queueLength: this.taskQueue.length + (this.activeTask ? 1 : 0),
+            activeTask: this.activeTask ? this.activeTask.uri.toString() : undefined,
+            generation: this.analysisGeneration
+        };
+
+        return {
+            ...status,
+            stale: status.isUpdating,
+            ...overrides
+        };
+    }
+
+    private emitIndexStatus(overrides: Partial<AnalysisIndexStatus> = {}): void {
+        const status = this.getIndexStatus(overrides);
+        for (const listener of this.indexStatusListeners) {
+            listener(status);
+        }
+    }
+
+    private markSnapshotReady(): void {
+        if (!this.snapshotReady) {
+            this.snapshotReady = true;
+            this.resolveSnapshotReady();
+        }
+        this.emitIndexStatus();
+    }
+
+    private attachIndexStatus(result: GraphViewData): GraphViewData {
+        return {
+            ...result,
+            meta: {
+                ...(result.meta || {}),
+                indexStatus: this.getIndexStatus()
+            }
+        };
     }
 
     /**
@@ -76,7 +127,7 @@ export class AnalysisRuntime {
                 }
                 this.analysisGeneration++;
                 this.projectGraph.clearAll();
-                this.resetReadyPromise();
+                this.resetSnapshotReadyPromise();
                 this.runIncrementalSync().catch(err => {
                     logger.info(`[AnalysisRuntime] 重新扫描失败: ${err}`);
                 });
@@ -218,6 +269,8 @@ export class AnalysisRuntime {
                 await this.syncService.loadFileIndex();
             }
 
+            this.markSnapshotReady();
+
             // 2. 将快照中的索引与当前工作区真实文件对比
             const changes = await this.syncService.scanWorkspaceChanges();
             logger.info(`[AnalysisRuntime] 扫描完毕。发现重命名文件: ${changes.renamed?.length || 0}个, 需分析文件: ${changes.addedOrModified.length}个, 被删除文件: ${changes.deleted.length}个.`);
@@ -273,10 +326,12 @@ export class AnalysisRuntime {
                 logger.info('[AnalysisRuntime] 增量同步完成！无新增更新项。');
             }
         } finally {
-            // 解析队列消费完毕后再解除启动拦截，避免前端查询到重建中的半成品图。
+            if (!this.snapshotReady) {
+                this.markSnapshotReady();
+            }
             await this.waitForQueueIdle(syncGeneration);
-            this.resolveReady();
-            logger.info('[AnalysisRuntime] 初始启动数据载入和分析队列处理完成，释放后端查询阻塞。');
+            this.emitIndexStatus({ suggestRequery: true });
+            logger.info('[AnalysisRuntime] 初始启动数据载入和分析队列处理完成。');
         }
     }
 
@@ -306,6 +361,8 @@ export class AnalysisRuntime {
             this.taskQueue.push({ uri, reason, cascade, generation });
         }
 
+        this.emitIndexStatus();
+
         // 尝试启动异步消费
         this._processTaskQueue().catch(err => {
             logger.info(`[AnalysisRuntime] 队列处理异常: ${err.message}`);
@@ -320,10 +377,12 @@ export class AnalysisRuntime {
             return;
         }
         this.isProcessing = true;
+        this.emitIndexStatus();
 
         try {
             while (this.taskQueue.length > 0) {
                 this.activeTask = this.taskQueue.shift()!;
+                this.emitIndexStatus();
                 const task = this.activeTask;
                 if (task.generation !== this.analysisGeneration) {
                     logger.info(`[AnalysisRuntime] 跳过旧世代分析任务: ${task.uri.fsPath}`);
@@ -375,14 +434,17 @@ export class AnalysisRuntime {
             }
         } finally {
             this.isProcessing = false;
+            this.activeTask = undefined;
 
             // 防御性检查：如果在固化快照（await）等异步操作期间又有新任务入队，则重新启动处理
             if (this.taskQueue.length > 0) {
+                this.emitIndexStatus();
                 this._processTaskQueue().catch(err => {
                     logger.info(`[AnalysisRuntime] 追加队列处理异常: ${err.message}`);
                 });
             } else {
                 this.resolveQueueIdleWaiters();
+                this.emitIndexStatus({ suggestRequery: true });
             }
         }
     }
@@ -433,16 +495,14 @@ export class AnalysisRuntime {
 
     // 编排调用: 查询全局视图
     public async queryGlobalRelation(relations: EdgeRelation[], includeExternal?: boolean): Promise<GraphViewData> {
-        await this.readyPromise;
-        await this.waitForQueueIdle(this.analysisGeneration);
-        return ViewQueryService.queryGlobalRelation(this.projectGraph, relations, includeExternal);
+        await this.snapshotReadyPromise;
+        return this.attachIndexStatus(ViewQueryService.queryGlobalRelation(this.projectGraph, relations, includeExternal));
     }
 
     // 编排调用: 查询节点依赖
     public async queryNodeDependencies(nodeId: string, allowedRelations?: EdgeRelation[], includeExternal?: boolean): Promise<GraphViewData> {
-        await this.readyPromise;
-        await this.waitForQueueIdle(this.analysisGeneration);
-        return ViewQueryService.queryNodeDependencies(this.projectGraph, nodeId, allowedRelations, includeExternal);
+        await this.snapshotReadyPromise;
+        return this.attachIndexStatus(ViewQueryService.queryNodeDependencies(this.projectGraph, nodeId, allowedRelations, includeExternal));
     }
 
     public async queryFunctionCallGraph(
@@ -453,15 +513,14 @@ export class AnalysisRuntime {
         maxNodes?: number,
         maxEdges?: number
     ): Promise<GraphViewData> {
-        await this.readyPromise;
-        await this.waitForQueueIdle(this.analysisGeneration);
-        return ViewQueryService.queryFunctionCallGraph(this.projectGraph, nodeId, {
+        await this.snapshotReadyPromise;
+        return this.attachIndexStatus(ViewQueryService.queryFunctionCallGraph(this.projectGraph, nodeId, {
             direction,
             depth,
             includeExternal,
             maxNodes,
             maxEdges
-        });
+        }));
     }
 
     public async queryFunctionCallPath(
@@ -471,13 +530,12 @@ export class AnalysisRuntime {
         maxDepth?: number,
         includeExternal?: boolean
     ): Promise<GraphViewData> {
-        await this.readyPromise;
-        await this.waitForQueueIdle(this.analysisGeneration);
-        return ViewQueryService.queryFunctionCallPath(this.projectGraph, sourceId, targetId, {
+        await this.snapshotReadyPromise;
+        return this.attachIndexStatus(ViewQueryService.queryFunctionCallPath(this.projectGraph, sourceId, targetId, {
             direction,
             maxDepth,
             includeExternal
-        });
+        }));
     }
 
     public async queryFunctionCallWaypointPath(
@@ -486,18 +544,16 @@ export class AnalysisRuntime {
         maxDepthPerSegment?: number,
         includeExternal?: boolean
     ): Promise<GraphViewData> {
-        await this.readyPromise;
-        await this.waitForQueueIdle(this.analysisGeneration);
-        return ViewQueryService.queryFunctionCallWaypointPath(this.projectGraph, nodeIds, {
+        await this.snapshotReadyPromise;
+        return this.attachIndexStatus(ViewQueryService.queryFunctionCallWaypointPath(this.projectGraph, nodeIds, {
             direction,
             maxDepthPerSegment,
             includeExternal
-        });
+        }));
     }
 
     public async resolveFunctionAtEditorPosition(uri: vscode.Uri, position: vscode.Position): Promise<FunctionRef | undefined> {
-        await this.readyPromise;
-        await this.waitForQueueIdle(this.analysisGeneration);
+        await this.snapshotReadyPromise;
 
         return SourceLocationService.resolveFunctionRefAtPosition(this.projectGraph, uri, position, 'editor');
     }
@@ -530,8 +586,8 @@ export class AnalysisRuntime {
         this.pendingDeletions.clear();
         logger.info('[AnalysisRuntime] 任务队列已清空');
 
-        // 4. 重新初始化 readyPromise
-        this.resetReadyPromise();
+        // 4. 重新初始化快照就绪状态
+        this.resetSnapshotReadyPromise();
 
         // 5. 触发完整重新扫描和增量同步
         logger.info('[AnalysisRuntime] 开始重新扫描工作区...');
@@ -574,10 +630,12 @@ export class AnalysisRuntime {
         }
     }
 
-    private resetReadyPromise(): void {
-        this.readyPromise = new Promise((resolve) => {
-            this.resolveReady = resolve;
+    private resetSnapshotReadyPromise(): void {
+        this.snapshotReady = false;
+        this.snapshotReadyPromise = new Promise((resolve) => {
+            this.resolveSnapshotReady = resolve;
         });
+        this.emitIndexStatus();
     }
 
     /**

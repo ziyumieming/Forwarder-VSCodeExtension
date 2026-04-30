@@ -263,6 +263,9 @@
             };
         var log = typeof safeOptions.log === 'function' ? safeOptions.log : function () { };
         var debugWarn = typeof safeOptions.debugWarn === 'function' ? safeOptions.debugWarn : function () { };
+        var onAfterReveal = typeof safeOptions.onAfterReveal === 'function'
+            ? safeOptions.onAfterReveal
+            : null;
 
         if (!cy) {
             return false;
@@ -302,6 +305,26 @@
             var nodeDuration = scaleDuration(220, safeOptions);
             var edgeDuration = scaleDuration(200, safeOptions);
             var maxStaggerSteps = 56;
+            var revealToken = animationToken;
+            var revealTotal = orderedNodes.length + (edges.length > 0 ? 1 : 0);
+            var revealCompleted = 0;
+            var afterRevealCalled = false;
+
+            function markRevealComplete(kind) {
+                revealCompleted += 1;
+                if (afterRevealCalled || revealCompleted < revealTotal) {
+                    return;
+                }
+                afterRevealCalled = true;
+                if (onAfterReveal && revealToken === layoutAnimationToken) {
+                    onAfterReveal({
+                        animationToken: revealToken,
+                        nodeCount: orderedNodes.length,
+                        edgeCount: edges.length,
+                        completedKind: kind
+                    });
+                }
+            }
 
             orderedNodes.forEach(function (node, index) {
                 var delay = Math.min(index, maxStaggerSteps) * staggerDelay;
@@ -327,31 +350,35 @@
                                 error: error
                             });
                         }
+                        markRevealComplete('node');
                     });
                 }, delay);
             });
 
             var lastDelay = Math.min(orderedNodes.length, maxStaggerSteps) * staggerDelay;
-            setTimeout(function () {
-                if (animationToken !== layoutAnimationToken) {
-                    return;
-                }
-
-                var edgeAnimation = edges.animation({
-                    style: { opacity: 1 },
-                    duration: edgeDuration,
-                    easing: 'ease-out'
-                });
-
-                edgeAnimation.play();
-                edgeAnimation.promise('completed').then(function () {
-                    try {
-                        edges.removeStyle('opacity');
-                    } catch (error) {
-                        debugWarn('remove edge opacity style failed after global reveal animation', { error: error });
+            if (edges.length > 0) {
+                setTimeout(function () {
+                    if (animationToken !== layoutAnimationToken) {
+                        return;
                     }
-                });
-            }, Math.max(scaleDuration(80, safeOptions), Math.floor(lastDelay * 0.5)));
+
+                    var edgeAnimation = edges.animation({
+                        style: { opacity: 1 },
+                        duration: edgeDuration,
+                        easing: 'ease-out'
+                    });
+
+                    edgeAnimation.play();
+                    edgeAnimation.promise('completed').then(function () {
+                        try {
+                            edges.removeStyle('opacity');
+                        } catch (error) {
+                            debugWarn('remove edge opacity style failed after global reveal animation', { error: error });
+                        }
+                        markRevealComplete('edge');
+                    });
+                }, Math.max(scaleDuration(80, safeOptions), Math.floor(lastDelay * 0.5)));
+            }
 
             log('renderer', 'info', 'global smooth reveal animation applied', {
                 nodeCount: orderedNodes.length,

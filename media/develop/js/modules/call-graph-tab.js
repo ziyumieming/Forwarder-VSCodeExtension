@@ -92,6 +92,11 @@
         var clearCanvas = typeof safeContext.clearCanvas === 'function' ? safeContext.clearCanvas : noop;
         var renderGraphData = typeof safeContext.renderGraphData === 'function' ? safeContext.renderGraphData : noop;
         var isActiveTab = typeof safeContext.isActiveTab === 'function' ? safeContext.isActiveTab : function () { return false; };
+        var captureGraphView = typeof safeContext.captureGraphView === 'function' ? safeContext.captureGraphView : noop;
+        var restoreGraphView = typeof safeContext.restoreGraphView === 'function' ? safeContext.restoreGraphView : function () { return false; };
+        var hasGraphViewState = typeof safeContext.hasGraphViewState === 'function' ? safeContext.hasGraphViewState : function () { return false; };
+        var hasPendingGraphRender = typeof safeContext.hasPendingGraphRender === 'function' ? safeContext.hasPendingGraphRender : function () { return false; };
+        var showEmptyGraphView = typeof safeContext.showEmptyGraphView === 'function' ? safeContext.showEmptyGraphView : noop;
         var getQueryDebounceWindowMs = typeof safeContext.getQueryDebounceWindowMs === 'function'
             ? safeContext.getQueryDebounceWindowMs
             : function () { return 80; };
@@ -105,6 +110,7 @@
             direction: 'both',
             includeExternal: false,
             hasRenderedCallGraph: false,
+            lastQueryKind: 'center',
             contextNode: null,
             cursorFunctionCandidate: null,
             selectionSnapshot: {
@@ -211,6 +217,7 @@
                 return null;
             }
 
+            state.lastQueryKind = 'center';
             return sendQuery('queryFunctionCallGraph', {
                 nodeId: state.centerFunction.id,
                 direction: state.direction || 'both',
@@ -231,6 +238,7 @@
                 return null;
             }
 
+            state.lastQueryKind = 'path';
             if (pathSlots.length === 2) {
                 return sendQuery('queryFunctionCallPath', {
                     sourceId: pathSlots[0].id,
@@ -247,6 +255,13 @@
                 maxDepthPerSegment: 8,
                 includeExternal: !!state.includeExternal
             }, 'call-path');
+        }
+
+        function replayLastQuery(source) {
+            if (state.lastQueryKind === 'path') {
+                return requestPathGraph(source || 'replay-path');
+            }
+            return requestCenterGraph(source || 'replay-center');
         }
 
         function updateUi() {
@@ -443,8 +458,10 @@
 
         function activate(event) {
             log('state', 'info', 'activate call graph tab', event || {});
-            if (!state.hasRenderedCallGraph) {
-                clearCanvas('call-graph-activate-empty');
+            if (event && event.restoredView) {
+                state.hasRenderedCallGraph = true;
+            } else if (!hasGraphViewState('callGraph') && !hasPendingGraphRender('callGraph') && !state.hasRenderedCallGraph) {
+                showEmptyGraphView('callGraph', 'call-graph');
             }
             updateUi();
         }
@@ -461,11 +478,18 @@
             id: 'callGraph',
             bindToolbar: bindToolbar,
             bindGraphEvents: bindGraphEvents,
+            onBeforeDeactivate: function () {
+                captureGraphView('callGraph');
+            },
+            onBeforeActivate: function () {
+                return restoreGraphView('callGraph') === true;
+            },
             onActivate: activate,
             onReactivate: activate,
             onDeactivate: deactivate,
             requestCenterGraph: requestCenterGraph,
             requestPathGraph: requestPathGraph,
+            replayLastQuery: replayLastQuery,
             addPathSlot: addPathSlot,
             setCenterFunction: setCenterFunction,
             setCursorFunctionCandidate: function (functionRef) {

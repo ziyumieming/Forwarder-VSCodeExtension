@@ -47,6 +47,7 @@ export function activate(context: vscode.ExtensionContext) {
 	}));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.analyze', () => analysisController.handleAnalyzeActiveFileCommand()));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.addFunctionToCallPath', () => analysisController.handleAddActiveFunctionToCallPathCommand()));
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.setFunctionAsCallCenter', () => analysisController.handleSetActiveFunctionAsCallCenterCommand()));
 	context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(event => {
 		analysisController.handleEditorSelectionChanged(event.textEditor);
 	}));
@@ -62,6 +63,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.clearAndRebuild', () => DebugController.debugClearAndRebuildGraph()));
 
 	// 将 runtime 也加入销毁队列，保证退出时解除设置监听
+	context.subscriptions.push({ dispose: () => analysisController.dispose() });
 	context.subscriptions.push({ dispose: () => runtime.dispose() });
 }
 

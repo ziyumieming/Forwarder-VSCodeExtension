@@ -18,6 +18,10 @@
         nodes: new Map(),
         edges: new Map()
     };
+    const graphViewStates = new Map();
+    const pendingGraphRenders = new Map();
+    let canvasOwnerTabId = null;
+    let latestIndexStatus = null;
     let layoutAnimationToken = 0;
 
     const DEBUG_LEVELS = {
@@ -291,6 +295,246 @@
         return QUERY_DUPLICATE_WINDOW_MS;
     };
 
+    const getActiveTabId = () => tabManagerModule && typeof tabManagerModule.getActiveTabId === 'function'
+        ? tabManagerModule.getActiveTabId()
+        : 'relationGraph';
+
+    const getTabIdForRequestMode = (requestMode) => {
+        if (requestMode === 'call-graph' || requestMode === 'call-path') {
+            return 'callGraph';
+        }
+        return 'relationGraph';
+    };
+
+    const setCanvasOwner = (tabId) => {
+        canvasOwnerTabId = tabId ? String(tabId) : null;
+    };
+
+    const hasGraphViewState = (tabId) => {
+        const state = graphViewStates.get(String(tabId || 'relationGraph'));
+        return !!(state && state.hasContent);
+    };
+
+    const hasPendingGraphRender = (tabId) => pendingGraphRenders.has(String(tabId || 'relationGraph'));
+
+    const showEmptyGraphView = (tabId, requestMode) => {
+        const normalizedTabId = String(tabId || getActiveTabId() || 'relationGraph');
+        layoutAnimationToken += 1;
+        cy.elements().remove();
+        latestGraphSnapshot = graphIncrementalModule && typeof graphIncrementalModule.createEmptyGraphSnapshot === 'function'
+            ? graphIncrementalModule.createEmptyGraphSnapshot()
+            : { nodes: new Map(), edges: new Map() };
+        setCanvasOwner(normalizedTabId);
+        log('state', 'info', 'empty graph view shown', {
+            tabId: normalizedTabId,
+            requestMode: requestMode || null
+        });
+    };
+
+    const cloneGraphSnapshot = (snapshot) => {
+        if (!snapshot) {
+            return graphIncrementalModule && typeof graphIncrementalModule.createEmptyGraphSnapshot === 'function'
+                ? graphIncrementalModule.createEmptyGraphSnapshot()
+                : { nodes: new Map(), edges: new Map() };
+        }
+
+        return {
+            nodes: new Map(snapshot.nodes || []),
+            edges: new Map(snapshot.edges || [])
+        };
+    };
+
+    const sanitizeElementJsonForSnapshot = (elementJson) => {
+        const sanitized = {
+            ...(elementJson || {}),
+            data: { ...((elementJson && elementJson.data) || {}) }
+        };
+        let removedTransientStyleCount = 0;
+
+        if (typeof elementJson?.classes === 'string') {
+            sanitized.classes = elementJson.classes;
+        }
+        if (elementJson?.position) {
+            sanitized.position = { ...elementJson.position };
+        }
+        if (elementJson?.group) {
+            sanitized.group = elementJson.group;
+        }
+        if (elementJson?.style && typeof elementJson.style === 'object') {
+            sanitized.style = { ...elementJson.style };
+            ['opacity', 'text-opacity', 'overlay-opacity'].forEach((key) => {
+                if (Object.prototype.hasOwnProperty.call(sanitized.style, key)) {
+                    delete sanitized.style[key];
+                    removedTransientStyleCount += 1;
+                }
+            });
+            if (Object.keys(sanitized.style).length === 0) {
+                delete sanitized.style;
+            }
+        }
+
+        return {
+            elementJson: sanitized,
+            removedTransientStyleCount
+        };
+    };
+
+    const captureCurrentGraphView = (tabId = getActiveTabId(), overrides = {}) => {
+        const normalizedTabId = tabId ? String(tabId) : 'relationGraph';
+        let removedTransientStyleCount = 0;
+        const elementsJson = cy.elements().map((element) => {
+            const sanitized = sanitizeElementJsonForSnapshot(element.json());
+            removedTransientStyleCount += sanitized.removedTransientStyleCount;
+            return sanitized.elementJson;
+        });
+        const hasContent = elementsJson.length > 0;
+        if (hasContent && canvasOwnerTabId && canvasOwnerTabId !== normalizedTabId) {
+            log('state', 'verbose', 'skip graph view capture for non-owner tab', {
+                tabId: normalizedTabId,
+                canvasOwnerTabId,
+                elementCount: elementsJson.length
+            });
+            return graphViewStates.get(normalizedTabId) || null;
+        }
+        const snapshotRequestMode = overrides.requestMode || lastRequestMode;
+        const snapshotCenterNodeId = Object.prototype.hasOwnProperty.call(overrides, 'centerNodeId')
+            ? overrides.centerNodeId
+            : currentCenterNodeId;
+        const snapshotCenterCardEnabled = Object.prototype.hasOwnProperty.call(overrides, 'centerCardEnabled')
+            ? !!overrides.centerCardEnabled
+            : centerCardEnabled;
+        graphViewStates.set(normalizedTabId, {
+            elementsJson,
+            viewport: {
+                zoom: cy.zoom(),
+                pan: { ...cy.pan() }
+            },
+            latestGraphSnapshot: cloneGraphSnapshot(latestGraphSnapshot),
+            requestMode: snapshotRequestMode,
+            centerNodeId: snapshotCenterNodeId,
+            lastCenterNodeId,
+            pendingCenterDetailsNodeId,
+            centerCardEnabled: snapshotCenterCardEnabled,
+            hasContent
+        });
+
+        log('state', 'verbose', 'graph view captured', {
+            tabId: normalizedTabId,
+            hasContent,
+            elementCount: elementsJson.length,
+            removedTransientStyleCount,
+            requestMode: snapshotRequestMode
+        });
+
+        return graphViewStates.get(normalizedTabId);
+    };
+
+    const restoreGraphView = (tabId) => {
+        const normalizedTabId = tabId ? String(tabId) : 'relationGraph';
+        const pendingRender = pendingGraphRenders.get(normalizedTabId);
+        if (pendingRender) {
+            pendingGraphRenders.delete(normalizedTabId);
+            if (normalizedTabId === 'callGraph'
+                && callGraphTab
+                && typeof callGraphTab.renderGraphData === 'function') {
+                callGraphTab.renderGraphData(pendingRender.graphData, pendingRender.options);
+            } else {
+                renderGraphData(pendingRender.graphData, pendingRender.options);
+            }
+            return true;
+        }
+
+        const saved = graphViewStates.get(normalizedTabId);
+        if (!saved || !saved.hasContent) {
+            return false;
+        }
+
+        layoutAnimationToken += 1;
+        cy.elements().remove();
+        cy.add(saved.elementsJson || []);
+        setCanvasOwner(normalizedTabId);
+        if (saved.viewport) {
+            cy.zoom(saved.viewport.zoom);
+            cy.pan(saved.viewport.pan);
+        }
+
+        latestGraphSnapshot = cloneGraphSnapshot(saved.latestGraphSnapshot);
+        lastRequestMode = saved.requestMode || lastRequestMode;
+        lastCenterNodeId = saved.lastCenterNodeId || null;
+        currentCenterNodeId = saved.centerNodeId || null;
+        pendingCenterDetailsNodeId = saved.pendingCenterDetailsNodeId || null;
+        centerCardEnabled = !!saved.centerCardEnabled;
+
+        if (centerStateModule && typeof centerStateModule.syncState === 'function') {
+            centerStateModule.syncState({
+                currentCenterNodeId,
+                lastCenterNodeId,
+                pendingCenterDetailsNodeId,
+                centerCardEnabled
+            });
+        }
+
+        if (saved.requestMode === 'relation-node'
+            || saved.requestMode === 'relation-global') {
+            renderHtmlNodeCards();
+        }
+
+        log('state', 'info', 'graph view restored', {
+            tabId: normalizedTabId,
+            elementCount: cy.elements().length,
+            requestMode: lastRequestMode
+        });
+
+        return true;
+    };
+
+    const clearGraphViewState = (tabId = getActiveTabId()) => {
+        graphViewStates.delete(String(tabId || 'relationGraph'));
+    };
+
+    const getIndexStatusRefs = () => ({
+        root: document.getElementById('analysis-index-status'),
+        text: document.getElementById('analysis-index-status-text'),
+        requery: document.getElementById('btn-analysis-index-requery')
+    });
+
+    const updateIndexStatusBanner = (status) => {
+        latestIndexStatus = status || latestIndexStatus;
+        const refs = getIndexStatusRefs();
+        if (!refs.root || !refs.text) {
+            return;
+        }
+
+        const safeStatus = status || {};
+        const showUpdating = !!safeStatus.isUpdating;
+        const showRequery = !showUpdating && !!safeStatus.suggestRequery;
+        refs.root.hidden = !(showUpdating || showRequery);
+        refs.text.textContent = showUpdating
+            ? 'Index updating; graph may be stale.'
+            : 'Index updated; re-query for fresh results.';
+        if (refs.requery) {
+            refs.requery.hidden = showUpdating;
+        }
+    };
+
+    const requestActiveTabRequery = (source = 'index-status-requery') => {
+        const activeTabId = getActiveTabId();
+        if (activeTabId === 'callGraph') {
+            if (callGraphTab && typeof callGraphTab.replayLastQuery === 'function') {
+                callGraphTab.replayLastQuery(source);
+            } else if (callGraphTab && typeof callGraphTab.requestCenterGraph === 'function') {
+                callGraphTab.requestCenterGraph(source);
+            }
+            return;
+        }
+
+        if (relationGraphTab && typeof relationGraphTab.replayLastQuery === 'function') {
+            relationGraphTab.replayLastQuery(source);
+        } else {
+            requestGlobalRelation(source);
+        }
+    };
+
     const computeGlobalToNodeZoomTarget = () => {
         const nodeCount = Math.max(1, cy.nodes().length);
         const rawZoom = 1.05 - 0.12 * Math.log2(nodeCount + 1);
@@ -503,19 +747,27 @@
             : {
                 nodes: new Map(),
                 edges: new Map()
-            };
+        };
+        setCanvasOwner(getActiveTabId());
         clearGlobalToNodeTransitionMask(reason);
+        clearGraphViewState(getActiveTabId());
         log('renderer', 'info', 'canvas cleared', { reason });
     }
 
     function renderGraphData(graphData, options = {}) {
         const animationToken = ++layoutAnimationToken;
         const renderRequestMode = options.requestMode || lastRequestMode;
+        const renderedTabId = getTabIdForRequestMode(renderRequestMode);
         const presentationMode = options.presentationMode || 'class-card';
         const renderCenterNodeId = options.currentCenterNodeId !== undefined
             ? (options.currentCenterNodeId ? String(options.currentCenterNodeId) : null)
             : currentCenterNodeId;
         const renderCenterCardEnabled = presentationMode === 'class-card' && centerCardEnabled;
+        const captureRenderedGraphView = () => captureCurrentGraphView(renderedTabId, {
+            requestMode: renderRequestMode,
+            centerNodeId: renderCenterNodeId,
+            centerCardEnabled: renderCenterCardEnabled
+        });
         const normalized = graphPipelineModule && typeof graphPipelineModule.normalizeGraphData === 'function'
             ? graphPipelineModule.normalizeGraphData({
                 graphData,
@@ -600,6 +852,7 @@
             cy.add(elements);
             latestGraphSnapshot = snapshot;
         }
+        setCanvasOwner(renderedTabId);
 
         if (renderRequestMode === 'relation-global') {
             setCenterNode(null, 'render:global');
@@ -695,6 +948,7 @@
                     animationToken,
                     duration: 260
                 });
+                captureRenderedGraphView();
                 return;
             }
 
@@ -704,6 +958,7 @@
             })) {
                 lockCenterNodeViewport('skip-layout:no-structural-change');
             }
+            captureRenderedGraphView();
             return;
         }
 
@@ -716,7 +971,13 @@
                     layoutAnimationToken,
                     getDefaultLayout: () => window.AnalysisStyle.getDefaultLayout(),
                     log,
-                    debugWarn
+                    debugWarn,
+                    onAfterReveal: ({ animationToken: completedAnimationToken }) => {
+                        if (completedAnimationToken !== layoutAnimationToken) {
+                            return;
+                        }
+                        captureRenderedGraphView();
+                    }
                 });
             if (usedGlobalSmoothLayout) {
                 return;
@@ -759,6 +1020,7 @@
                         : null
                 });
             if (usedStagger) {
+                captureRenderedGraphView();
                 return;
             }
         }
@@ -788,6 +1050,7 @@
                     animationToken,
                     duration: 320
                 });
+                captureRenderedGraphView();
                 return;
             }
 
@@ -797,6 +1060,7 @@
             })) {
                 lockCenterNodeViewport('layoutstop');
             }
+            captureRenderedGraphView();
         });
 
         cy.layout(layoutOptions).run();
@@ -880,6 +1144,8 @@
             },
             getQueryDebounceWindowMs,
             getQueryDuplicateWindowMs,
+            captureGraphView: captureCurrentGraphView,
+            restoreGraphView: restoreGraphView,
             animateCenterNodeViewport,
             lockCenterNodeViewport,
             centerLockZoom: CENTER_LOCK_ZOOM,
@@ -908,6 +1174,11 @@
             }),
             getQueryDebounceWindowMs,
             getQueryDuplicateWindowMs,
+            captureGraphView: captureCurrentGraphView,
+            restoreGraphView: restoreGraphView,
+            hasGraphViewState: hasGraphViewState,
+            hasPendingGraphRender: hasPendingGraphRender,
+            showEmptyGraphView: showEmptyGraphView,
             isActiveTab: () => tabManagerModule
                 && typeof tabManagerModule.getActiveTabId === 'function'
                 && tabManagerModule.getActiveTabId() === 'callGraph'
@@ -920,6 +1191,12 @@
             callGraphTab.bindGraphEvents();
         }
     }
+
+    const indexStatusRefs = getIndexStatusRefs();
+    indexStatusRefs.requery?.addEventListener('click', function () {
+        requestActiveTabRequery('index-status-banner');
+        updateIndexStatusBanner({ ...(latestIndexStatus || {}), suggestRequery: false });
+    });
 
     // 监听来自后端的消息
     window.addEventListener('message', (event) => {
@@ -972,10 +1249,25 @@
             return;
         }
 
+        if (data.command === 'setCallGraphCenter') {
+            if (data.functionRef && callGraphTab && typeof callGraphTab.setCenterFunction === 'function') {
+                if (tabManagerModule && typeof tabManagerModule.activate === 'function') {
+                    tabManagerModule.activate('callGraph', 'editor-command');
+                }
+                callGraphTab.setCenterFunction(data.functionRef, 'editor-command');
+            }
+            return;
+        }
+
         if (data.command === 'cursorFunctionCandidateChanged') {
             if (callGraphTab && typeof callGraphTab.setCursorFunctionCandidate === 'function') {
                 callGraphTab.setCursorFunctionCandidate(data.functionRef);
             }
+            return;
+        }
+
+        if (data.command === 'analysisIndexStatusChanged') {
+            updateIndexStatusBanner(data.status || null);
             return;
         }
 
@@ -987,6 +1279,34 @@
                     latestQueryIdForMode,
                     dropReason,
                     matchedRequestCommand: responseMeta?.command || null
+                });
+                return;
+            }
+
+            if (data.data && data.data.meta && data.data.meta.indexStatus) {
+                updateIndexStatusBanner(data.data.meta.indexStatus);
+            }
+
+            const targetTabId = getTabIdForRequestMode(responseRequestMode || responseMeta?.meta?.requestMode || lastRequestMode);
+            const activeTabId = getActiveTabId();
+            if (targetTabId !== activeTabId) {
+                if (targetTabId === 'relationGraph'
+                    && relationGraphTab
+                    && typeof relationGraphTab.handleBackendMessage === 'function'
+                    && !relationGraphTab.handleBackendMessage(data, responseMeta)) {
+                    return;
+                }
+                pendingGraphRenders.set(targetTabId, {
+                    graphData: data.data,
+                    options: {
+                        requestMode: responseRequestMode || responseMeta?.meta?.requestMode || lastRequestMode,
+                        presentationMode: targetTabId === 'callGraph' ? 'simple-node' : 'class-card'
+                    }
+                });
+                log('query', 'info', 'defer inactive tab render response', {
+                    targetTabId,
+                    activeTabId,
+                    requestMode: responseRequestMode || responseMeta?.meta?.requestMode || null
                 });
                 return;
             }

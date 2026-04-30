@@ -7,10 +7,21 @@ export class AnalysisController {
     private runtime: AnalysisRuntime;
     private cursorCandidateTimer?: ReturnType<typeof setTimeout>;
     private cursorCandidateRequestSeq = 0;
+    private indexStatusSubscription: vscode.Disposable;
 
     constructor(private readonly provider: AnalysisViewProvider, runtime?: AnalysisRuntime) {
         this.runtime = runtime || AnalysisRuntime.getInstance();
         this.provider.setMessageHandler(this.handleWebviewMessage.bind(this));
+        this.indexStatusSubscription = this.runtime.onIndexStatusChanged(status => {
+            this.provider.postMessage({
+                command: 'analysisIndexStatusChanged',
+                status
+            });
+
+            if (status.snapshotReady && !status.isUpdating && status.suggestRequery) {
+                this.handleEditorSelectionChanged(vscode.window.activeTextEditor);
+            }
+        });
     }
 
     private async handleWebviewMessage(data: any): Promise<void> {
@@ -124,6 +135,31 @@ export class AnalysisController {
         }
     }
 
+    public async handleSetActiveFunctionAsCallCenterCommand(): Promise<void> {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage('No active editor.');
+            return;
+        }
+
+        try {
+            const functionRef = await this.runtime.resolveFunctionAtEditorPosition(editor.document.uri, editor.selection.active);
+            if (!functionRef) {
+                vscode.window.showWarningMessage('No function or method found at the current cursor position.');
+                return;
+            }
+
+            await vscode.commands.executeCommand('workbench.view.extension.forwarder-sidebar');
+            this.provider.postMessage({
+                command: 'setCallGraphCenter',
+                functionRef
+            });
+            vscode.window.showInformationMessage(`Set call graph center: ${functionRef.label}`);
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to set call graph center: ${error}`);
+        }
+    }
+
     public handleEditorSelectionChanged(editor: vscode.TextEditor | undefined): void {
         if (this.cursorCandidateTimer) {
             clearTimeout(this.cursorCandidateTimer);
@@ -159,5 +195,12 @@ export class AnalysisController {
             command: 'cursorFunctionCandidateChanged',
             functionRef
         });
+    }
+
+    public dispose(): void {
+        this.indexStatusSubscription.dispose();
+        if (this.cursorCandidateTimer) {
+            clearTimeout(this.cursorCandidateTimer);
+        }
     }
 }

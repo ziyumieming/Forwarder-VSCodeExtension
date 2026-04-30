@@ -27,6 +27,10 @@
         "title": "Forwarder: Add Function to Call Path"
       },
       {
+        "command": "forwarder.setFunctionAsCallCenter",
+        "title": "Forwarder: Set Function as Call Graph Center"
+      },
+      {
         "command": "forwarder.debug.analyze",
         "title": "Debug: 诊断流程通行性"
       },
@@ -81,6 +85,11 @@
         {
           "when": "editorTextFocus",
           "command": "forwarder.addFunctionToCallPath",
+          "group": "navigation"
+        },
+        {
+          "when": "editorTextFocus",
+          "command": "forwarder.setFunctionAsCallCenter",
           "group": "navigation"
         }
       ]

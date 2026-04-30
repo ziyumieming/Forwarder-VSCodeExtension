@@ -44,6 +44,8 @@
         var animateCenterNodeViewport = typeof safeContext.animateCenterNodeViewport === 'function' ? safeContext.animateCenterNodeViewport : noop;
         var lockCenterNodeViewport = typeof safeContext.lockCenterNodeViewport === 'function' ? safeContext.lockCenterNodeViewport : noop;
         var isActiveTab = typeof safeContext.isActiveTab === 'function' ? safeContext.isActiveTab : function () { return true; };
+        var captureGraphView = typeof safeContext.captureGraphView === 'function' ? safeContext.captureGraphView : noop;
+        var restoreGraphView = typeof safeContext.restoreGraphView === 'function' ? safeContext.restoreGraphView : function () { return false; };
         var suppressNodeTapNodeId = null;
         var suppressNodeTapUntil = 0;
 
@@ -427,8 +429,17 @@
             replayLastQuery: replayLastQuery,
             onHeaderAction: onHeaderAction,
             handleBackendMessage: handleBackendMessage,
+            onBeforeDeactivate: function () {
+                captureGraphView('relationGraph');
+            },
+            onBeforeActivate: function () {
+                return restoreGraphView('relationGraph') === true;
+            },
             onActivate: function (event) {
                 log('state', 'info', 'activate relation graph tab', event || {});
+                if (event && event.restoredView) {
+                    return;
+                }
                 if (event && event.source !== 'startup' && cy && cy.elements().length === 0) {
                     requestGlobalRelation('tab-activate');
                 }

@@ -27,6 +27,7 @@ The Webview frontend keeps non-ESM script loading and now uses a tab shell aroun
 - `relationGraph`: the current class/relation graph. It owns relation queries, node dependency queries, center-card behavior, and graph interaction replay.
 - `callGraph`: function call graph page. It owns call-specific parameter state, empty state, simple-node interactions, center call graph queries, and path query triggers.
 - Both tabs reuse the same `#cy` Cytoscape instance. Switching tabs changes toolbar visibility and active controller, not the canvas element.
+- The shared canvas has an explicit owner tab. A tab may capture canvas state only when it owns the current elements; empty Call Graph activation clears the visible canvas without deleting another tab's saved view.
 - The ordered call path tray is shared across relationGraph and callGraph through SelectionStore, so editor commands, class-card method clicks, and call-graph node actions write to the same list.
 
 ### Script Load Order
@@ -72,6 +73,8 @@ Tab code should pass `meta.requestMode` explicitly when sending queries.
 
 The Call Graph tab sends `queryFunctionCallGraph` with `requestMode='call-graph'`. The Path action sends `queryFunctionCallPath` for two selected waypoints and `queryFunctionCallWaypointPath` for three or more ordered waypoints with `requestMode='call-path'`.
 
+Queries return immediately after the backend snapshot is loaded. If the analysis queue is still updating files, responses include `meta.indexStatus.stale=true`; the Webview shows an index status banner and offers a manual re-query after the queue becomes idle.
+
 ### Shared FunctionRef Store
 
 `SelectionStore` stores ordered function references:
@@ -94,10 +97,11 @@ The Call Graph tab sends `queryFunctionCallGraph` with `requestMode='call-graph'
 - The toolbar exposes only query parameters and controls: depth, direction, external-scope toggle, and Query/Fit/Layout/Clear actions.
 - The toolbar includes a compact center pill before Query, so users can see the current center without consuming graph space.
 - The canvas shows an empty overlay until a center function is selected; it can display the current editor cursor function candidate and let the user explicitly use it as center.
-- The bottom tray exposes a compact ordered list of function tags. Tags can be removed, reordered by drag-and-drop, or right-clicked for Set as Center/Remove. The lightweight Path action lives at the end of the tray.
+- The bottom tray exposes a compact ordered list of function tags. Tags can be removed, cleared, reordered by drag-and-drop, or right-clicked for Set as Center/Remove. Clear and Path live in the tray header; tags wrap below and the tray grows until its height cap.
 - Node left-click in Call Graph mode sets the local center function. Node right-click opens actions for adding a function to the ordered path tray or selecting it as center.
 - Ordered path tags are now wired to backend path queries. Two waypoints use a direct two-endpoint shortest path. Three or more waypoints use pairwise shortest-path stitching in the user-defined order and return segment metadata for failures.
-- Class graph method clicks and the editor command `forwarder.addFunctionToCallPath` add functions to the shared tray without forcing a tab switch.
+- Class graph method clicks and the editor command `forwarder.addFunctionToCallPath` add functions to the shared tray without forcing a tab switch. The editor command `forwarder.setFunctionAsCallCenter` switches to Call Graph and sets the cursor function as center without auto-querying.
+- Relation Graph and Call Graph share one Cytoscape canvas, but each tab captures its own elements, viewport, render mode, and center state before switching. Returning to a tab restores its previous view instead of re-querying or clearing the canvas.
 
 ## Consistency Guardrails
 

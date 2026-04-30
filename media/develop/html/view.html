@@ -107,6 +107,10 @@
 
     <main class="canvas-wrap">
         <div id="cy" aria-label="Cytoscape Canvas"></div>
+        <div id="analysis-index-status" class="analysis-index-status" hidden>
+            <span id="analysis-index-status-text">Index updating; graph may be stale.</span>
+            <button id="btn-analysis-index-requery" class="nav-btn analysis-index-requery" type="button">Re-query</button>
+        </div>
         <div id="call-empty-overlay" class="call-empty-overlay" hidden>
             <div class="call-empty-panel">
                 <div class="call-empty-title">Select a function to inspect calls</div>
@@ -122,9 +126,10 @@
             <div class="call-tray-header">
                 <span class="call-tray-title">Path Order</span>
                 <span id="call-path-hint" class="call-tray-hint">Add functions to define waypoint order.</span>
+                <button id="btn-call-tray-clear" class="nav-btn call-path-icon-btn" type="button" title="Clear path order" aria-label="Clear path order">🗑</button>
+                <button id="btn-call-tray-path-query" class="nav-btn call-path-query-btn" type="button" disabled>Path</button>
             </div>
             <div id="call-path-chip-list" class="call-path-chip-list" aria-label="Ordered function path"></div>
-            <button id="btn-call-tray-path-query" class="nav-btn call-path-query-btn" type="button" disabled>Path</button>
         </section>
         <div id="call-path-chip-menu" class="call-context-menu" hidden role="menu" aria-label="Call path chip actions">
             <button type="button" data-path-chip-action="center">Set as Center</button>

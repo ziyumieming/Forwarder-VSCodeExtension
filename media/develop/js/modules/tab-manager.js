@@ -83,6 +83,13 @@
         var previousTabId = activeTabId;
         var previousTab = previousTabId ? tabs.get(previousTabId) : null;
 
+        if (previousTab && typeof previousTab.controller.onBeforeDeactivate === 'function') {
+            previousTab.controller.onBeforeDeactivate({
+                source: source || 'activate',
+                nextTabId: normalizedId
+            });
+        }
+
         if (previousTab && typeof previousTab.controller.onDeactivate === 'function') {
             previousTab.controller.onDeactivate({
                 source: source || 'activate',
@@ -98,10 +105,19 @@
             setTabButtonState(id, isActive);
         });
 
+        var restoredView = false;
+        if (typeof nextTab.controller.onBeforeActivate === 'function') {
+            restoredView = nextTab.controller.onBeforeActivate({
+                source: source || 'activate',
+                previousTabId: previousTabId
+            }) === true;
+        }
+
         if (typeof nextTab.controller.onActivate === 'function') {
             nextTab.controller.onActivate({
                 source: source || 'activate',
-                previousTabId: previousTabId
+                previousTabId: previousTabId,
+                restoredView: restoredView
             });
         }
 

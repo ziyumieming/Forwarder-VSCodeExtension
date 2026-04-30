@@ -43,6 +43,17 @@ export interface FunctionRef {
     label: string;
     meta?: string;
     source?: 'editor' | 'class-card' | 'call-graph';
+    pendingGraphNode?: boolean;
+}
+
+export interface AnalysisIndexStatus {
+    snapshotReady: boolean;
+    isUpdating: boolean;
+    queueLength: number;
+    activeTask?: string;
+    generation: number;
+    stale?: boolean;
+    suggestRequery?: boolean;
 }
 
 // 多维邻接表别名；边的定义被嵌入Map数据结构中。
@@ -64,6 +75,7 @@ export interface GraphViewData {
         direction?: 'incoming' | 'outgoing' | 'both';
         pathFound?: boolean;
         reason?: string;
+        indexStatus?: AnalysisIndexStatus;
         waypointIds?: string[];
         segments?: {
             sourceId: string;

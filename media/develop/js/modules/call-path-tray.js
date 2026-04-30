@@ -43,6 +43,7 @@
             refs.chipList = document.getElementById('call-path-chip-list');
             refs.pathHint = document.getElementById('call-path-hint');
             refs.pathQuery = document.getElementById('btn-call-tray-path-query');
+            refs.clear = document.getElementById('btn-call-tray-clear');
             refs.chipMenu = document.getElementById('call-path-chip-menu');
         }
 
@@ -213,6 +214,12 @@
                     ? 'Add at least two functions to query a call path'
                     : 'Query call path for ordered waypoints';
             }
+            if (refs.clear) {
+                refs.clear.disabled = functions.length === 0;
+                refs.clear.title = functions.length === 0
+                    ? 'No functions to clear'
+                    : 'Clear path order';
+            }
 
             renderChips(functions);
             log('state', 'verbose', 'call path tray rendered', {
@@ -261,6 +268,11 @@
             });
             refs.pathQuery?.addEventListener('click', function () {
                 onQueryPath('path-tray');
+            });
+            refs.clear?.addEventListener('click', function () {
+                if (selectionStore && typeof selectionStore.clear === 'function') {
+                    selectionStore.clear('tray-clear');
+                }
             });
             refs.chipMenu?.addEventListener('click', function (event) {
                 var action = event.target && event.target.dataset ? event.target.dataset.pathChipAction : null;

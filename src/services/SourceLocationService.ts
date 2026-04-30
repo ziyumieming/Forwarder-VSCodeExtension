@@ -150,7 +150,22 @@ export class SourceLocationService {
                 && node.location.range.start.line === callable.range.start.line
                 && node.location.range.start.character === callable.range.start.character);
 
-        return matchingGraphNode ? this.toFunctionRef(matchingGraphNode, source) : undefined;
+        if (matchingGraphNode) {
+            return this.toFunctionRef(matchingGraphNode, source);
+        }
+
+        const resolved = await this.resolveSymbolInfo(uri, position);
+        if (resolved && (resolved.type === 'function' || resolved.type === 'method')) {
+            return {
+                id: resolved.id,
+                label: resolved.name,
+                meta: resolved.namespace || this.summarizeUri(uriString),
+                source,
+                pendingGraphNode: true
+            };
+        }
+
+        return undefined;
     }
 
     public static toFunctionRef(node: IRNode, source: FunctionRef['source']): FunctionRef {
