@@ -5,8 +5,8 @@ import { CallGraphDirection, ViewQueryService } from './ViewServices';
 import { SynchronizationService } from './SynchronizationServices';
 import { GatingService } from './GatingServices';
 import { AnalysisIndexStatus, EdgeRelation, FunctionRef, GraphNodeRef, GraphViewData, NodeType, SourceLocationTarget } from '../models/GraphDefinition';
-import { SourceLocationService } from './SourceLocationService';
-import { AnalysisIndexStatusService } from './AnalysisIndexStatusService';
+import { SourceLocationService } from './SourceLocationServices';
+import { AnalysisIndexStatusService } from './AnalysisIndexStatusServices';
 import { logger } from '../utils/logger';
 
 export interface AnalysisTask {

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { EdgeData, EdgeRelation, IRNode, NodeType } from '../models/GraphDefinition';
-import { ResolvedSymbolInfo, SourceLocationService, SymbolCache } from '../services/SourceLocationService';
+import { ResolvedSymbolInfo, SourceLocationService, SymbolCache } from '../services/SourceLocationServices';
 
 export type { ResolvedSymbolInfo, SymbolCache };
 

@@ -4,7 +4,7 @@ import { LSPService } from '../services/LSPServices';
 import { ViewQueryService } from '../services/ViewServices';
 import { AnalysisRuntime } from '../services/AnalysisRuntime';
 import { ProjectGraph } from '../models/GraphManager';
-import { SourceLocationService } from '../services/SourceLocationService';
+import { SourceLocationService } from '../services/SourceLocationServices';
 import { logger } from '../utils/logger';
 
 export class DebugController {
