@@ -6,6 +6,7 @@ import { SynchronizationService } from './SynchronizationServices';
 import { GatingService } from './GatingServices';
 import { AnalysisIndexStatus, EdgeRelation, FunctionRef, GraphViewData } from '../models/GraphDefinition';
 import { SourceLocationService } from './SourceLocationService';
+import { AnalysisIndexStatusService } from './AnalysisIndexStatusService';
 import { logger } from '../utils/logger';
 
 export interface AnalysisTask {
@@ -39,17 +40,10 @@ export class AnalysisRuntime {
     private analysisGeneration: number = 0;
     private queueIdleResolvers: (() => void)[] = [];
 
-    // 快照加载完成后即可响应查询；后续队列更新通过 stale 状态提示前端。
-    private snapshotReadyPromise: Promise<void>;
-    private resolveSnapshotReady!: () => void;
-    private snapshotReady: boolean = false;
-    private indexStatusListeners: Set<(status: AnalysisIndexStatus) => void> = new Set();
+    private readonly indexStatusService = new AnalysisIndexStatusService();
 
     private constructor() {
         this.projectGraph = new ProjectGraph();
-        this.snapshotReadyPromise = new Promise((resolve) => {
-            this.resolveSnapshotReady = resolve;
-        });
     }
 
     public static getInstance(): AnalysisRuntime {
@@ -60,52 +54,28 @@ export class AnalysisRuntime {
     }
 
     public onIndexStatusChanged(listener: (status: AnalysisIndexStatus) => void): vscode.Disposable {
-        this.indexStatusListeners.add(listener);
-        listener(this.getIndexStatus());
-        return new vscode.Disposable(() => {
-            this.indexStatusListeners.delete(listener);
-        });
+        return this.indexStatusService.onStatusChanged(listener);
     }
 
     public getIndexStatus(overrides: Partial<AnalysisIndexStatus> = {}): AnalysisIndexStatus {
-        const status: AnalysisIndexStatus = {
-            snapshotReady: this.snapshotReady,
+        return this.indexStatusService.getStatus(overrides);
+    }
+
+    private emitIndexStatus(overrides: Partial<AnalysisIndexStatus> = {}): void {
+        this.indexStatusService.updateQueueState({
             isUpdating: this.isProcessing || this.taskQueue.length > 0 || !!this.activeTask,
             queueLength: this.taskQueue.length + (this.activeTask ? 1 : 0),
             activeTask: this.activeTask ? this.activeTask.uri.toString() : undefined,
             generation: this.analysisGeneration
-        };
-
-        return {
-            ...status,
-            stale: status.isUpdating,
-            ...overrides
-        };
-    }
-
-    private emitIndexStatus(overrides: Partial<AnalysisIndexStatus> = {}): void {
-        const status = this.getIndexStatus(overrides);
-        for (const listener of this.indexStatusListeners) {
-            listener(status);
-        }
+        }, overrides);
     }
 
     private markSnapshotReady(): void {
-        if (!this.snapshotReady) {
-            this.snapshotReady = true;
-            this.resolveSnapshotReady();
-        }
-        this.emitIndexStatus();
+        this.indexStatusService.markSnapshotReady();
     }
 
     private attachIndexStatus(result: GraphViewData): GraphViewData {
-        return {
-            ...result,
-            meta: {
-                ...(result.meta || {}),
-                indexStatus: this.getIndexStatus()
-            }
-        };
+        return this.indexStatusService.attachToGraphView(result);
     }
 
     /**
@@ -326,9 +296,7 @@ export class AnalysisRuntime {
                 logger.info('[AnalysisRuntime] 增量同步完成！无新增更新项。');
             }
         } finally {
-            if (!this.snapshotReady) {
-                this.markSnapshotReady();
-            }
+            this.markSnapshotReady();
             await this.waitForQueueIdle(syncGeneration);
             this.emitIndexStatus({ suggestRequery: true });
             logger.info('[AnalysisRuntime] 初始启动数据载入和分析队列处理完成。');
@@ -495,13 +463,13 @@ export class AnalysisRuntime {
 
     // 编排调用: 查询全局视图
     public async queryGlobalRelation(relations: EdgeRelation[], includeExternal?: boolean): Promise<GraphViewData> {
-        await this.snapshotReadyPromise;
+        await this.indexStatusService.waitForSnapshotReady();
         return this.attachIndexStatus(ViewQueryService.queryGlobalRelation(this.projectGraph, relations, includeExternal));
     }
 
     // 编排调用: 查询节点依赖
     public async queryNodeDependencies(nodeId: string, allowedRelations?: EdgeRelation[], includeExternal?: boolean): Promise<GraphViewData> {
-        await this.snapshotReadyPromise;
+        await this.indexStatusService.waitForSnapshotReady();
         return this.attachIndexStatus(ViewQueryService.queryNodeDependencies(this.projectGraph, nodeId, allowedRelations, includeExternal));
     }
 
@@ -513,7 +481,7 @@ export class AnalysisRuntime {
         maxNodes?: number,
         maxEdges?: number
     ): Promise<GraphViewData> {
-        await this.snapshotReadyPromise;
+        await this.indexStatusService.waitForSnapshotReady();
         return this.attachIndexStatus(ViewQueryService.queryFunctionCallGraph(this.projectGraph, nodeId, {
             direction,
             depth,
@@ -530,7 +498,7 @@ export class AnalysisRuntime {
         maxDepth?: number,
         includeExternal?: boolean
     ): Promise<GraphViewData> {
-        await this.snapshotReadyPromise;
+        await this.indexStatusService.waitForSnapshotReady();
         return this.attachIndexStatus(ViewQueryService.queryFunctionCallPath(this.projectGraph, sourceId, targetId, {
             direction,
             maxDepth,
@@ -544,7 +512,7 @@ export class AnalysisRuntime {
         maxDepthPerSegment?: number,
         includeExternal?: boolean
     ): Promise<GraphViewData> {
-        await this.snapshotReadyPromise;
+        await this.indexStatusService.waitForSnapshotReady();
         return this.attachIndexStatus(ViewQueryService.queryFunctionCallWaypointPath(this.projectGraph, nodeIds, {
             direction,
             maxDepthPerSegment,
@@ -553,7 +521,7 @@ export class AnalysisRuntime {
     }
 
     public async resolveFunctionAtEditorPosition(uri: vscode.Uri, position: vscode.Position): Promise<FunctionRef | undefined> {
-        await this.snapshotReadyPromise;
+        await this.indexStatusService.waitForSnapshotReady();
 
         return SourceLocationService.resolveFunctionRefAtPosition(this.projectGraph, uri, position, 'editor');
     }
@@ -631,10 +599,7 @@ export class AnalysisRuntime {
     }
 
     private resetSnapshotReadyPromise(): void {
-        this.snapshotReady = false;
-        this.snapshotReadyPromise = new Promise((resolve) => {
-            this.resolveSnapshotReady = resolve;
-        });
+        this.indexStatusService.resetSnapshotReady();
         this.emitIndexStatus();
     }
 
