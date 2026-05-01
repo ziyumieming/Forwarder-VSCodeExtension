@@ -46,6 +46,15 @@ export interface FunctionRef {
     pendingGraphNode?: boolean;
 }
 
+export interface GraphNodeRef {
+    id: string;
+    label: string;
+    type: NodeType;
+    meta?: string;
+    source: 'editor';
+    pendingGraphNode?: boolean;
+}
+
 export interface AnalysisIndexStatus {
     snapshotReady: boolean;
     isUpdating: boolean;

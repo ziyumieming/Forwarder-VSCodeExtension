@@ -40,6 +40,7 @@ export class AnalysisViewProvider implements vscode.WebviewViewProvider {
         const moduleTabManagerScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'tab-manager.js'));
         const moduleSelectionStoreScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'selection-store.js'));
         const moduleCallPathTrayScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'call-path-tray.js'));
+        const moduleCursorNodeHighlightScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'cursor-node-highlight.js'));
         const moduleQueryServiceScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'query-service.js'));
         const moduleGraphIncrementalScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'graph-incremental.js'));
         const moduleGraphPipelineScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'graph-pipeline.js'));
@@ -74,6 +75,7 @@ export class AnalysisViewProvider implements vscode.WebviewViewProvider {
                 .replace(/{{moduleTabManagerScriptUri}}/g, moduleTabManagerScriptUri.toString())
                 .replace(/{{moduleSelectionStoreScriptUri}}/g, moduleSelectionStoreScriptUri.toString())
                 .replace(/{{moduleCallPathTrayScriptUri}}/g, moduleCallPathTrayScriptUri.toString())
+                .replace(/{{moduleCursorNodeHighlightScriptUri}}/g, moduleCursorNodeHighlightScriptUri.toString())
                 .replace(/{{moduleQueryServiceScriptUri}}/g, moduleQueryServiceScriptUri.toString())
                 .replace(/{{moduleGraphIncrementalScriptUri}}/g, moduleGraphIncrementalScriptUri.toString())
                 .replace(/{{moduleGraphPipelineScriptUri}}/g, moduleGraphPipelineScriptUri.toString())

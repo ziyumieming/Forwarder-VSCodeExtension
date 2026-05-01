@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { FunctionRef, IRNode, LineCol, NodeType } from '../models/GraphDefinition';
+import { FunctionRef, GraphNodeRef, IRNode, LineCol, NodeType } from '../models/GraphDefinition';
 import { ProjectGraph } from '../models/GraphManager';
 import { SymbolRule } from '../models/SymbolRule';
 import { LSPService } from './LSPServices';
@@ -168,12 +168,70 @@ export class SourceLocationService {
         return undefined;
     }
 
+    public static async resolveGraphNodeRefAtPosition(
+        graph: ProjectGraph,
+        uri: vscode.Uri,
+        position: vscode.Position,
+        allowedTypes: NodeType[] = ['class', 'interface', 'function', 'method']
+    ): Promise<GraphNodeRef | undefined> {
+        return (await this.resolveGraphNodeRefsAtPosition(graph, uri, position, allowedTypes))[0];
+    }
+
+    public static async resolveGraphNodeRefsAtPosition(
+        graph: ProjectGraph,
+        uri: vscode.Uri,
+        position: vscode.Position,
+        allowedTypes: NodeType[] = ['class', 'interface', 'function', 'method']
+    ): Promise<GraphNodeRef[]> {
+        const uriString = uri.toString();
+        const lineCol: LineCol = { line: position.line, character: position.character };
+        const graphNodes = this.findGraphNodesContainingPosition(graph, uriString, lineCol, allowedTypes);
+        if (graphNodes.length > 0) {
+            return graphNodes.map(node => this.toGraphNodeRef(node));
+        }
+
+        const resolved = await this.resolveSymbolInfo(uri, position);
+        if (!resolved || !allowedTypes.includes(resolved.type)) {
+            return [];
+        }
+
+        const matchingGraphNode = graph
+            .getNodesForFile(uriString, allowedTypes)
+            .find(node => node.name === resolved.name
+                && node.type === resolved.type
+                && node.location.range.start.line === resolved.range.start.line
+                && node.location.range.start.character === resolved.range.start.character);
+
+        if (matchingGraphNode) {
+            return [this.toGraphNodeRef(matchingGraphNode)];
+        }
+
+        return [{
+            id: resolved.id,
+            label: resolved.name,
+            type: resolved.type,
+            meta: resolved.namespace || this.summarizeUri(uriString),
+            source: 'editor',
+            pendingGraphNode: true
+        }];
+    }
+
     public static toFunctionRef(node: IRNode, source: FunctionRef['source']): FunctionRef {
         return {
             id: node.id,
             label: node.signature || node.name,
             meta: node.namespace || this.summarizeUri(node.location.uri),
             source
+        };
+    }
+
+    public static toGraphNodeRef(node: IRNode): GraphNodeRef {
+        return {
+            id: node.id,
+            label: node.signature || node.name,
+            type: node.type,
+            meta: node.namespace || this.summarizeUri(node.location.uri),
+            source: 'editor'
         };
     }
 

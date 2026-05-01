@@ -183,10 +183,17 @@ export class AnalysisController {
                 command: 'cursorFunctionCandidateChanged',
                 functionRef: undefined
             });
+            this.provider.postMessage({
+                command: 'cursorGraphNodeCandidateChanged',
+                graphNodeRef: undefined
+            });
             return;
         }
 
-        const functionRef = await this.runtime.resolveFunctionAtEditorPosition(editor.document.uri, editor.selection.active);
+        const [functionRef, graphNodeRefs] = await Promise.all([
+            this.runtime.resolveFunctionAtEditorPosition(editor.document.uri, editor.selection.active),
+            this.runtime.resolveGraphNodesAtEditorPosition(editor.document.uri, editor.selection.active)
+        ]);
         if (requestSeq !== this.cursorCandidateRequestSeq) {
             return;
         }
@@ -194,6 +201,11 @@ export class AnalysisController {
         this.provider.postMessage({
             command: 'cursorFunctionCandidateChanged',
             functionRef
+        });
+        this.provider.postMessage({
+            command: 'cursorGraphNodeCandidateChanged',
+            graphNodeRef: graphNodeRefs[0],
+            graphNodeRefs
         });
     }
 

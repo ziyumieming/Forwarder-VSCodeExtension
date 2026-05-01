@@ -4,7 +4,7 @@ import { AdapterService } from './AdapterServices';
 import { CallGraphDirection, ViewQueryService } from './ViewServices';
 import { SynchronizationService } from './SynchronizationServices';
 import { GatingService } from './GatingServices';
-import { AnalysisIndexStatus, EdgeRelation, FunctionRef, GraphViewData } from '../models/GraphDefinition';
+import { AnalysisIndexStatus, EdgeRelation, FunctionRef, GraphNodeRef, GraphViewData, NodeType } from '../models/GraphDefinition';
 import { SourceLocationService } from './SourceLocationService';
 import { AnalysisIndexStatusService } from './AnalysisIndexStatusService';
 import { logger } from '../utils/logger';
@@ -524,6 +524,24 @@ export class AnalysisRuntime {
         await this.indexStatusService.waitForSnapshotReady();
 
         return SourceLocationService.resolveFunctionRefAtPosition(this.projectGraph, uri, position, 'editor');
+    }
+
+    public async resolveGraphNodeAtEditorPosition(
+        uri: vscode.Uri,
+        position: vscode.Position,
+        allowedTypes: NodeType[] = ['class', 'interface', 'function', 'method']
+    ): Promise<GraphNodeRef | undefined> {
+        return (await this.resolveGraphNodesAtEditorPosition(uri, position, allowedTypes))[0];
+    }
+
+    public async resolveGraphNodesAtEditorPosition(
+        uri: vscode.Uri,
+        position: vscode.Position,
+        allowedTypes: NodeType[] = ['class', 'interface', 'function', 'method']
+    ): Promise<GraphNodeRef[]> {
+        await this.indexStatusService.waitForSnapshotReady();
+
+        return SourceLocationService.resolveGraphNodeRefsAtPosition(this.projectGraph, uri, position, allowedTypes);
     }
 
     /**

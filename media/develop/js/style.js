@@ -195,6 +195,17 @@
                     }
                 },
                 {
+                    selector: 'node.editor-cursor-highlight',
+                    style: {
+                        'border-width': 5,
+                        'border-color': '#ffdf6e',
+                        'overlay-color': '#ffdf6e',
+                        'overlay-opacity': 0.18,
+                        'overlay-padding': 8,
+                        'z-index': 999
+                    }
+                },
+                {
                     selector: '.transition-hidden',
                     style: {
                         opacity: 0,

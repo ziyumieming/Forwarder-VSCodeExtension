@@ -41,6 +41,7 @@
     const tabManagerModule = window.AnalysisModules?.TabManager;
     const selectionStoreModule = window.AnalysisModules?.SelectionStore;
     const callPathTrayModule = window.AnalysisModules?.CallPathTray;
+    const cursorNodeHighlightModule = window.AnalysisModules?.CursorNodeHighlight;
     const queryServiceModule = window.AnalysisModules?.QueryService;
     const graphIncrementalModule = window.AnalysisModules?.GraphIncremental;
     const graphPipelineModule = window.AnalysisModules?.GraphPipeline;
@@ -52,6 +53,7 @@
     let relationGraphTab = null;
     let callGraphTab = null;
     let callPathTray = null;
+    let cursorNodeHighlight = null;
 
     if (graphIncrementalModule && typeof graphIncrementalModule.createEmptyGraphSnapshot === 'function') {
         latestGraphSnapshot = graphIncrementalModule.createEmptyGraphSnapshot();
@@ -138,6 +140,13 @@
 
     const cy = createCyInstance();
     window.__analysisDebug = { cy };
+
+    if (cursorNodeHighlightModule && typeof cursorNodeHighlightModule.create === 'function') {
+        cursorNodeHighlight = cursorNodeHighlightModule.create({
+            cy,
+            log
+        });
+    }
 
     log('state', 'info', 'bootstrap', {
         cyReady: !!cy,
@@ -352,7 +361,13 @@
         let removedTransientStyleCount = 0;
 
         if (typeof elementJson?.classes === 'string') {
-            sanitized.classes = elementJson.classes;
+            sanitized.classes = elementJson.classes
+                .split(/\s+/)
+                .filter((className) => className && className !== 'editor-cursor-highlight')
+                .join(' ');
+            if (!sanitized.classes) {
+                delete sanitized.classes;
+            }
         }
         if (elementJson?.position) {
             sanitized.position = { ...elementJson.position };
@@ -450,9 +465,13 @@
         }
 
         layoutAnimationToken += 1;
+        if (cursorNodeHighlight && typeof cursorNodeHighlight.clear === 'function') {
+            cursorNodeHighlight.clear();
+        }
         cy.elements().remove();
         cy.add(saved.elementsJson || []);
         setCanvasOwner(normalizedTabId);
+        applyCursorNodeHighlight('restore:' + normalizedTabId);
         if (saved.viewport) {
             cy.zoom(saved.viewport.zoom);
             cy.pan(saved.viewport.pan);
@@ -741,6 +760,9 @@
 
     function clearCanvas(reason = 'clear-canvas') {
         layoutAnimationToken += 1;
+        if (cursorNodeHighlight && typeof cursorNodeHighlight.clear === 'function') {
+            cursorNodeHighlight.clear();
+        }
         cy.elements().remove();
         latestGraphSnapshot = graphIncrementalModule && typeof graphIncrementalModule.createEmptyGraphSnapshot === 'function'
             ? graphIncrementalModule.createEmptyGraphSnapshot()
@@ -752,6 +774,19 @@
         clearGlobalToNodeTransitionMask(reason);
         clearGraphViewState(getActiveTabId());
         log('renderer', 'info', 'canvas cleared', { reason });
+    }
+
+    function applyCursorNodeHighlight(reason = 'apply') {
+        if (!cursorNodeHighlight || typeof cursorNodeHighlight.apply !== 'function') {
+            return false;
+        }
+
+        const applied = cursorNodeHighlight.apply();
+        log('state', 'verbose', 'cursor graph node highlight reapplied', {
+            reason,
+            applied
+        });
+        return applied;
     }
 
     function renderGraphData(graphData, options = {}) {
@@ -825,6 +860,9 @@
         });
 
         let incrementalResult = null;
+        if (cursorNodeHighlight && typeof cursorNodeHighlight.clear === 'function') {
+            cursorNodeHighlight.clear();
+        }
         if (renderRequestMode === 'relation-node') {
             if (graphIncrementalModule && typeof graphIncrementalModule.applyIncremental === 'function') {
                 incrementalResult = graphIncrementalModule.applyIncremental({
@@ -896,6 +934,7 @@
                 }
             });
         }
+        applyCursorNodeHighlight('renderGraphData');
 
         if (!isGlobalToNodeTransition) {
             clearGlobalToNodeTransitionMask('renderGraphData:normal');
@@ -1266,6 +1305,15 @@
             return;
         }
 
+        if (data.command === 'cursorGraphNodeCandidateChanged') {
+            if (cursorNodeHighlight && typeof cursorNodeHighlight.setCandidate === 'function') {
+                cursorNodeHighlight.setCandidate(Array.isArray(data.graphNodeRefs)
+                    ? data.graphNodeRefs
+                    : data.graphNodeRef);
+            }
+            return;
+        }
+
         if (data.command === 'analysisIndexStatusChanged') {
             updateIndexStatusBanner(data.status || null);
             return;
@@ -1366,11 +1414,12 @@
     if (tabManagerModule && typeof tabManagerModule.register === 'function') {
         tabManagerModule.register('relationGraph', relationGraphTab || {});
         tabManagerModule.register('callGraph', callGraphTab || {});
-        if (callPathTray
-            && typeof callPathTray.refresh === 'function'
-            && typeof tabManagerModule.subscribe === 'function') {
+        if (typeof tabManagerModule.subscribe === 'function') {
             tabManagerModule.subscribe(() => {
-                callPathTray.refresh();
+                if (callPathTray && typeof callPathTray.refresh === 'function') {
+                    callPathTray.refresh();
+                }
+                applyCursorNodeHighlight('tab-switch');
             });
         }
         tabManagerModule.activate('relationGraph', 'startup');
