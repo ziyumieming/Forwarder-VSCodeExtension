@@ -98,7 +98,14 @@ export class ViewQueryService {
             const containsEdges = graph.getRelatedEdges(nodeId, ['contains']).filter(e => e.sourceId === nodeId);
             const functionNodeIds = new Set(containsEdges.map(e => e.targetId));
             const containsNodes = graph.getNodes(containsEdges.map(e => e.targetId));
-            const methods = containsNodes.filter(n => functionNodeIds.has(n.id)).map(n => ({ id: n.id, name: n.name }));
+            const methods = containsNodes
+                .filter(n => functionNodeIds.has(n.id) && (n.type === 'function' || n.type === 'method'))
+                .map(n => ({
+                    id: n.id,
+                    name: n.name,
+                    signature: n.signature,
+                    location: n.location
+                }));
 
             centerDetails = {
                 nodeId,

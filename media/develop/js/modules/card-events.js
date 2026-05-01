@@ -43,6 +43,8 @@
         var onSectionToggle = typeof safeOptions.onSectionToggle === 'function' ? safeOptions.onSectionToggle : noop;
         var onMemberClick = typeof safeOptions.onMemberClick === 'function' ? safeOptions.onMemberClick : noop;
         var onMemberHover = typeof safeOptions.onMemberHover === 'function' ? safeOptions.onMemberHover : noop;
+        var onMemberContextMenu = typeof safeOptions.onMemberContextMenu === 'function' ? safeOptions.onMemberContextMenu : noop;
+        var onMemberContextIntent = typeof safeOptions.onMemberContextIntent === 'function' ? safeOptions.onMemberContextIntent : noop;
         var onIgnoreClick = typeof safeOptions.onIgnoreClick === 'function' ? safeOptions.onIgnoreClick : noop;
 
         addListener(documentRef, 'pointerdown', function (event) {
@@ -57,6 +59,11 @@
                 startY: event.clientY,
                 moved: false
             };
+
+            var member = getClosest(event.target, '.analysis-class-card-member');
+            if (member && event.button === 2) {
+                onMemberContextIntent(member, event);
+            }
         });
 
         addListener(documentRef, 'pointermove', function (event) {
@@ -187,6 +194,19 @@
             }
 
             onMemberClick(item, event);
+        });
+
+        addListener(documentRef, 'contextmenu', function (event) {
+            var item = getClosest(event.target, '.analysis-class-card-member');
+            if (!item) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            ignoreCardClickUntil = Date.now() + 260;
+            onMemberContextIntent(item, event);
+            onMemberContextMenu(item, event);
         });
 
         bound = true;

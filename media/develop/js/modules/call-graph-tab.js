@@ -352,6 +352,19 @@
                 return;
             }
 
+            if (action === 'reveal') {
+                if (postMessage) {
+                    postMessage({
+                        command: 'revealSourceLocation',
+                        target: {
+                            kind: 'node',
+                            nodeId: functionRef.id
+                        }
+                    });
+                }
+                return;
+            }
+
             addPathSlot(functionRef);
         }
 

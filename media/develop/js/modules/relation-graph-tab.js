@@ -41,6 +41,7 @@
         var setPendingGlobalToNodeTransition = typeof safeContext.setPendingGlobalToNodeTransition === 'function' ? safeContext.setPendingGlobalToNodeTransition : noop;
         var getQueryDebounceWindowMs = typeof safeContext.getQueryDebounceWindowMs === 'function' ? safeContext.getQueryDebounceWindowMs : function () { return 80; };
         var getQueryDuplicateWindowMs = typeof safeContext.getQueryDuplicateWindowMs === 'function' ? safeContext.getQueryDuplicateWindowMs : function () { return 220; };
+        var shouldSuppressContextTap = typeof safeContext.shouldSuppressContextTap === 'function' ? safeContext.shouldSuppressContextTap : function () { return false; };
         var animateCenterNodeViewport = typeof safeContext.animateCenterNodeViewport === 'function' ? safeContext.animateCenterNodeViewport : noop;
         var lockCenterNodeViewport = typeof safeContext.lockCenterNodeViewport === 'function' ? safeContext.lockCenterNodeViewport : noop;
         var isActiveTab = typeof safeContext.isActiveTab === 'function' ? safeContext.isActiveTab : function () { return true; };
@@ -336,6 +337,13 @@
                 return;
             }
 
+            if (shouldSuppressContextTap()) {
+                log('state', 'verbose', 'suppress node context tap', {
+                    nodeId: node ? String(node.id()) : null
+                });
+                return;
+            }
+
             var tappedNodeId = String(node.id());
             if (!getCurrentCenterNodeId() || tappedNodeId !== String(getCurrentCenterNodeId())) {
                 return;
@@ -346,6 +354,11 @@
 
         function onBackgroundContextTap() {
             if (!isActiveTab()) {
+                return;
+            }
+
+            if (shouldSuppressContextTap()) {
+                log('state', 'verbose', 'suppress background context tap', {});
                 return;
             }
 

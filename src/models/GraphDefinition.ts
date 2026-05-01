@@ -55,6 +55,22 @@ export interface GraphNodeRef {
     pendingGraphNode?: boolean;
 }
 
+export interface SourceLocationTarget {
+    kind: 'node' | 'member' | 'location';
+    nodeId?: string;
+    ownerNodeId?: string;
+    memberKind?: 'method' | 'field';
+    memberId?: string;
+    memberIndex?: number;
+    uri?: string;
+    range?: { start: LineCol; end: LineCol };
+}
+
+export interface ResolvedSourceLocation {
+    uri: string;
+    range: { start: LineCol; end: LineCol };
+}
+
 export interface AnalysisIndexStatus {
     snapshotReady: boolean;
     isUpdating: boolean;
@@ -76,7 +92,7 @@ export interface GraphViewData {
         name: string;
         type: NodeType;
         fields?: { name: string; type?: string; signature?: string; range?: { start: LineCol; end: LineCol } }[];
-        methods: { id: string; name: string }[];
+        methods: { id: string; name: string; signature?: string; location?: IRNode['location'] }[];
     };
     meta?: {
         truncated?: boolean;

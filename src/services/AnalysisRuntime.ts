@@ -4,7 +4,7 @@ import { AdapterService } from './AdapterServices';
 import { CallGraphDirection, ViewQueryService } from './ViewServices';
 import { SynchronizationService } from './SynchronizationServices';
 import { GatingService } from './GatingServices';
-import { AnalysisIndexStatus, EdgeRelation, FunctionRef, GraphNodeRef, GraphViewData, NodeType } from '../models/GraphDefinition';
+import { AnalysisIndexStatus, EdgeRelation, FunctionRef, GraphNodeRef, GraphViewData, NodeType, SourceLocationTarget } from '../models/GraphDefinition';
 import { SourceLocationService } from './SourceLocationService';
 import { AnalysisIndexStatusService } from './AnalysisIndexStatusService';
 import { logger } from '../utils/logger';
@@ -542,6 +542,11 @@ export class AnalysisRuntime {
         await this.indexStatusService.waitForSnapshotReady();
 
         return SourceLocationService.resolveGraphNodeRefsAtPosition(this.projectGraph, uri, position, allowedTypes);
+    }
+
+    public async revealSourceLocation(target: SourceLocationTarget): Promise<boolean> {
+        await this.indexStatusService.waitForSnapshotReady();
+        return SourceLocationService.revealSourceLocation(this.projectGraph, target);
     }
 
     /**

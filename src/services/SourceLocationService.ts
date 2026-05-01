@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { FunctionRef, GraphNodeRef, IRNode, LineCol, NodeType } from '../models/GraphDefinition';
+import { FunctionRef, GraphNodeRef, IRNode, LineCol, NodeType, ResolvedSourceLocation, SourceLocationTarget } from '../models/GraphDefinition';
 import { ProjectGraph } from '../models/GraphManager';
 import { SymbolRule } from '../models/SymbolRule';
 import { LSPService } from './LSPServices';
@@ -235,6 +235,110 @@ export class SourceLocationService {
         };
     }
 
+    public static resolveSourceLocationTarget(
+        graph: ProjectGraph,
+        target: SourceLocationTarget
+    ): ResolvedSourceLocation | undefined {
+        if (!target || !target.kind) {
+            return undefined;
+        }
+
+        if (target.kind === 'location') {
+            return target.uri && target.range
+                ? { uri: target.uri, range: target.range }
+                : undefined;
+        }
+
+        if (target.kind === 'node') {
+            return target.nodeId ? this.resolveNodeLocation(graph, target.nodeId) : undefined;
+        }
+
+        if (target.kind === 'member') {
+            return this.resolveClassMemberLocation(graph, target);
+        }
+
+        return undefined;
+    }
+
+    public static resolveNodeLocation(graph: ProjectGraph, nodeId: string): ResolvedSourceLocation | undefined {
+        const node = graph.getNode(nodeId);
+        if (!node) {
+            return undefined;
+        }
+
+        return {
+            uri: node.location.uri,
+            range: node.location.range
+        };
+    }
+
+    public static resolveClassMemberLocation(
+        graph: ProjectGraph,
+        target: SourceLocationTarget
+    ): ResolvedSourceLocation | undefined {
+        if (target.memberKind === 'method' && target.memberId) {
+            const methodLocation = this.resolveNodeLocation(graph, target.memberId);
+            if (methodLocation) {
+                return methodLocation;
+            }
+        }
+
+        const owner = target.ownerNodeId ? graph.getNode(target.ownerNodeId) : undefined;
+        if (!owner) {
+            return target.uri && target.range
+                ? { uri: target.uri, range: target.range }
+                : undefined;
+        }
+
+        if (target.range) {
+            return {
+                uri: target.uri || owner.location.uri,
+                range: target.range
+            };
+        }
+
+        if (target.memberKind === 'field' && typeof target.memberIndex === 'number') {
+            const field = owner.fields?.[target.memberIndex];
+            if (field?.range) {
+                return {
+                    uri: owner.location.uri,
+                    range: field.range
+                };
+            }
+        }
+
+        return undefined;
+    }
+
+    public static async revealSourceLocation(graph: ProjectGraph, target: SourceLocationTarget): Promise<boolean> {
+        const resolved = this.resolveSourceLocationTarget(graph, target);
+        if (!resolved) {
+            return false;
+        }
+
+        await this.revealLocation(resolved);
+        return true;
+    }
+
+    public static async revealNode(graph: ProjectGraph, nodeId: string): Promise<boolean> {
+        return this.revealSourceLocation(graph, { kind: 'node', nodeId });
+    }
+
+    public static async revealClassMember(graph: ProjectGraph, target: SourceLocationTarget): Promise<boolean> {
+        return this.revealSourceLocation(graph, { ...target, kind: 'member' });
+    }
+
+    public static async revealLocation(location: ResolvedSourceLocation): Promise<void> {
+        const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(location.uri));
+        const range = this.toVscodeRange(location.range);
+        const editor = await vscode.window.showTextDocument(document, {
+            preview: false,
+            selection: range
+        });
+        editor.selection = new vscode.Selection(range.start, range.end);
+        editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    }
+
     public static summarizeUri(uri: string): string {
         const parts = uri.replace(/\\/g, '/').split('/').filter(part => part.length > 0);
         return parts.length > 0 ? parts[parts.length - 1] : uri;
@@ -291,5 +395,12 @@ export class SourceLocationService {
     private static rangeSpan(range: { start: LineCol; end: LineCol }): number {
         return (range.end.line - range.start.line) * 100000
             + (range.end.character - range.start.character);
+    }
+
+    private static toVscodeRange(range: { start: LineCol; end: LineCol }): vscode.Range {
+        return new vscode.Range(
+            new vscode.Position(range.start.line, range.start.character),
+            new vscode.Position(range.end.line, range.end.character)
+        );
     }
 }

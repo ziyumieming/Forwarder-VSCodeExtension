@@ -79,6 +79,20 @@ export class AnalysisController {
                 break;
             }
 
+            case 'revealSourceLocation': {
+                logger.info(`[AnalysisController] revealSourceLocation target=${JSON.stringify(data.target)}`);
+                try {
+                    const revealed = await this.runtime.revealSourceLocation(data.target);
+                    if (!revealed) {
+                        vscode.window.showWarningMessage('Unable to locate the requested source item.');
+                    }
+                } catch (error) {
+                    logger.info(`[AnalysisController] revealSourceLocation failed: ${error}`);
+                    vscode.window.showWarningMessage('Unable to locate the requested source item.');
+                }
+                break;
+            }
+
             default:
                 logger.info(`[AnalysisController] unknown webview command: ${data.command}`);
                 break;

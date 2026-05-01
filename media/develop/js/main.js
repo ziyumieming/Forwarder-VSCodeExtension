@@ -54,6 +54,8 @@
     let callGraphTab = null;
     let callPathTray = null;
     let cursorNodeHighlight = null;
+    let classCardMemberContext = null;
+    let suppressRelationGraphContextUntil = 0;
 
     if (graphIncrementalModule && typeof graphIncrementalModule.createEmptyGraphSnapshot === 'function') {
         latestGraphSnapshot = graphIncrementalModule.createEmptyGraphSnapshot();
@@ -641,6 +643,100 @@
         return changed;
     };
 
+    function parseMemberRange(rangeText) {
+        if (!rangeText) {
+            return null;
+        }
+
+        try {
+            const parsed = JSON.parse(rangeText);
+            return parsed && parsed.start && parsed.end ? parsed : null;
+        } catch (error) {
+            log('state', 'verbose', 'ignore invalid class member range payload', {
+                error: String(error)
+            });
+            return null;
+        }
+    }
+
+    function buildClassMemberRevealTarget(item) {
+        if (!item || !item.dataset) {
+            return null;
+        }
+
+        const target = {
+            kind: 'member',
+            ownerNodeId: item.dataset.nodeId || '',
+            memberKind: item.dataset.memberKind || '',
+            memberId: item.dataset.memberId || '',
+            memberIndex: Number(item.dataset.memberIndex)
+        };
+        const range = parseMemberRange(item.dataset.memberRange);
+        if (range) {
+            target.range = range;
+        }
+        if (!Number.isFinite(target.memberIndex)) {
+            delete target.memberIndex;
+        }
+
+        return target.ownerNodeId && target.memberKind ? target : null;
+    }
+
+    function postRevealSourceLocation(target) {
+        if (!target) {
+            return;
+        }
+
+        vscode.postMessage({
+            command: 'revealSourceLocation',
+            target
+        });
+    }
+
+    function hideClassCardMemberMenu() {
+        const menu = document.getElementById('class-card-member-menu');
+        if (menu) {
+            menu.hidden = true;
+        }
+        classCardMemberContext = null;
+    }
+
+    function showClassCardMemberMenu(item, event) {
+        const menu = document.getElementById('class-card-member-menu');
+        if (!menu) {
+            return;
+        }
+
+        classCardMemberContext = {
+            target: buildClassMemberRevealTarget(item),
+            memberKind: item.dataset.memberKind || '',
+            memberId: item.dataset.memberId || '',
+            memberLabel: item.dataset.memberLabel || '',
+            ownerNodeId: item.dataset.nodeId || ''
+        };
+
+        const addPathButton = menu.querySelector('[data-class-member-action="add-path"]');
+        if (addPathButton) {
+            addPathButton.hidden = classCardMemberContext.memberKind !== 'method';
+        }
+
+        menu.style.left = Math.max(12, Math.round(event.clientX || 120)) + 'px';
+        menu.style.top = Math.max(72, Math.round(event.clientY || 120)) + 'px';
+        menu.hidden = false;
+    }
+
+    function suppressRelationGraphContextTap(reason) {
+        suppressRelationGraphContextUntil = Date.now() + 450;
+        log('state', 'verbose', 'suppress relation graph context tap', {
+            reason,
+            suppressUntil: suppressRelationGraphContextUntil
+        });
+    }
+
+    function shouldSuppressRelationGraphContextTap() {
+        return Date.now() <= suppressRelationGraphContextUntil;
+    }
+
     const bindClassCardEvents = () => {
         if (!cardEventsModule || typeof cardEventsModule.bind !== 'function') {
             return;
@@ -711,6 +807,13 @@
                     memberId: item.dataset.memberId,
                     memberLabel: item.dataset.memberLabel
                 });
+            },
+            onMemberContextIntent: () => {
+                suppressRelationGraphContextTap('class-card-member-context-intent');
+            },
+            onMemberContextMenu: (item, event) => {
+                suppressRelationGraphContextTap('class-card-member-context-menu');
+                showClassCardMemberMenu(item, event);
             }
         });
     };
@@ -1183,6 +1286,7 @@
             },
             getQueryDebounceWindowMs,
             getQueryDuplicateWindowMs,
+            shouldSuppressContextTap: shouldSuppressRelationGraphContextTap,
             captureGraphView: captureCurrentGraphView,
             restoreGraphView: restoreGraphView,
             animateCenterNodeViewport,
@@ -1235,6 +1339,45 @@
     indexStatusRefs.requery?.addEventListener('click', function () {
         requestActiveTabRequery('index-status-banner');
         updateIndexStatusBanner({ ...(latestIndexStatus || {}), suggestRequery: false });
+    });
+
+    const classCardMemberMenu = document.getElementById('class-card-member-menu');
+    classCardMemberMenu?.addEventListener('click', function (event) {
+        const action = event.target && event.target.dataset ? event.target.dataset.classMemberAction : null;
+        if (!action || !classCardMemberContext) {
+            return;
+        }
+
+        if (action === 'reveal') {
+            postRevealSourceLocation(classCardMemberContext.target);
+            hideClassCardMemberMenu();
+            return;
+        }
+
+        if (action === 'add-path'
+            && classCardMemberContext.memberKind === 'method'
+            && selectionStoreModule
+            && typeof selectionStoreModule.addFunction === 'function') {
+            selectionStoreModule.addFunction({
+                id: classCardMemberContext.memberId,
+                label: classCardMemberContext.memberLabel || classCardMemberContext.memberId,
+                meta: classCardMemberContext.ownerNodeId || '',
+                source: 'class-card'
+            }, 'class-card-member-menu');
+            if (callPathTray && typeof callPathTray.refresh === 'function') {
+                callPathTray.refresh();
+            }
+            hideClassCardMemberMenu();
+        }
+    });
+    document.addEventListener('click', function (event) {
+        if (!classCardMemberMenu || classCardMemberMenu.hidden) {
+            return;
+        }
+        if (classCardMemberMenu.contains(event.target)) {
+            return;
+        }
+        hideClassCardMemberMenu();
     });
 
     // 监听来自后端的消息

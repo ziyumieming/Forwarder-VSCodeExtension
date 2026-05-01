@@ -26,10 +26,13 @@
 
         var memberLabel = String(rawText).trim();
         var memberId = String((member && member.id) || (nodeId + ':' + memberKind + ':' + index));
+        var memberRange = member && member.range ? JSON.stringify(member.range) : '';
 
         return '<button class="analysis-class-card-member" data-node-id="' + escapeAttr(nodeId)
             + '" data-member-kind="' + escapeAttr(memberKind)
             + '" data-member-id="' + escapeAttr(memberId)
+            + '" data-member-index="' + escapeAttr(index)
+            + '" data-member-range="' + escapeAttr(memberRange)
             + '" data-member-label="' + escapeAttr(memberLabel)
             + '">' + escapeHtml(memberLabel || '(unknown)') + '</button>';
     }

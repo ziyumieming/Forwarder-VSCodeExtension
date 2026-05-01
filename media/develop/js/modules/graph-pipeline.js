@@ -101,14 +101,40 @@
         var classCard = safeNode.classCard || {};
         var title = firstNonBlank(classCard.title, getNodeDisplayLabel(safeNode));
 
-        var fields = toStringList(classCard.fields || safeNode.fields || safeNode.properties || []);
-        var methods = toStringList(classCard.methods || safeNode.methods || []);
+        var fields = normalizeMemberList(classCard.fields || safeNode.fields || safeNode.properties || []);
+        var methods = normalizeMemberList(classCard.methods || safeNode.methods || []);
 
         return {
             title: String(title),
             fields: fields,
             methods: methods
         };
+    }
+
+    function normalizeMemberList(source) {
+        if (!Array.isArray(source)) {
+            return [];
+        }
+
+        return source
+            .map(function (item) {
+                if (typeof item === 'string') {
+                    return { name: item };
+                }
+
+                if (item && typeof item === 'object') {
+                    var normalized = { ...item };
+                    if (!normalized.range && normalized.location && normalized.location.range) {
+                        normalized.range = normalized.location.range;
+                    }
+                    return normalized;
+                }
+
+                return null;
+            })
+            .filter(function (item) {
+                return !!item && firstNonBlank(item.signature, item.displayName, item.name, item.label).length > 0;
+            });
     }
 
     function readClassCardFromCenterDetails(centerDetails) {
@@ -119,8 +145,8 @@
         return {
             nodeId: String(centerDetails.nodeId),
             title: firstNonBlank(centerDetails.name, centerDetails.displayName, labelFromNodeId(centerDetails.nodeId)),
-            fields: toStringList(centerDetails.fields || []),
-            methods: toStringList(centerDetails.methods || [])
+            fields: normalizeMemberList(centerDetails.fields || []),
+            methods: normalizeMemberList(centerDetails.methods || [])
         };
     }
 
@@ -556,6 +582,7 @@
         readClassCardFromNode: readClassCardFromNode,
         readClassCardFromCenterDetails: readClassCardFromCenterDetails,
         createLoadingClassCard: createLoadingClassCard,
+        normalizeMemberList: normalizeMemberList,
         resolveClassCardForNode: resolveClassCardForNode,
         buildClassCardLabel: buildClassCardLabel,
         estimateCardSize: estimateCardSize,
