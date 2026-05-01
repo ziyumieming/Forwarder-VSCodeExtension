@@ -48,6 +48,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.analyze', () => analysisController.handleAnalyzeActiveFileCommand()));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.addFunctionToCallPath', () => analysisController.handleAddActiveFunctionToCallPathCommand()));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.setFunctionAsCallCenter', () => analysisController.handleSetActiveFunctionAsCallCenterCommand()));
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.summarizeActiveFunction', () => analysisController.handleSummarizeActiveFunctionCommand()));
 	context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(event => {
 		analysisController.handleEditorSelectionChanged(event.textEditor);
 	}));

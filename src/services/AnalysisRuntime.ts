@@ -4,10 +4,11 @@ import { AdapterService } from './AdapterServices';
 import { CallGraphDirection, ViewQueryService } from './ViewServices';
 import { SynchronizationService } from './SynchronizationServices';
 import { GatingService } from './GatingServices';
-import { AnalysisIndexStatus, EdgeRelation, FunctionRef, GraphNodeRef, GraphViewData, NodeType, SourceLocationTarget } from '../models/GraphDefinition';
+import { AnalysisIndexStatus, EdgeRelation, FunctionRef, FunctionSummaryData, GraphNodeRef, GraphViewData, NodeType, SourceLocationTarget } from '../models/GraphDefinition';
 import { SourceLocationService } from './SourceLocationServices';
 import { AnalysisIndexStatusService } from './AnalysisIndexStatusServices';
 import { logger } from '../utils/logger';
+import { SummaryService } from './SummaryServices';
 
 export interface AnalysisTask {
     uri: vscode.Uri;
@@ -524,6 +525,17 @@ export class AnalysisRuntime {
         await this.indexStatusService.waitForSnapshotReady();
 
         return SourceLocationService.resolveFunctionRefAtPosition(this.projectGraph, uri, position, 'editor');
+    }
+
+    public async summarizeFunctionAtEditorPosition(uri: vscode.Uri, position: vscode.Position): Promise<FunctionSummaryData | undefined> {
+        await this.indexStatusService.waitForSnapshotReady();
+
+        const functionRef = await SourceLocationService.resolveFunctionRefAtPosition(this.projectGraph, uri, position, 'editor');
+        if (!functionRef || functionRef.pendingGraphNode) {
+            return undefined;
+        }
+
+        return SummaryService.summarizeFunction(this.projectGraph, functionRef.id);
     }
 
     public async resolveGraphNodeAtEditorPosition(

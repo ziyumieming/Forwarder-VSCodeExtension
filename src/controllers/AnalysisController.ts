@@ -174,6 +174,40 @@ export class AnalysisController {
         }
     }
 
+    public async handleSummarizeActiveFunctionCommand(): Promise<void> {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage('No active editor.');
+            return;
+        }
+
+        try {
+            await vscode.commands.executeCommand('workbench.view.extension.forwarder-sidebar');
+            const summaryData = await this.runtime.summarizeFunctionAtEditorPosition(editor.document.uri, editor.selection.active);
+            if (!summaryData) {
+                vscode.window.showWarningMessage('No indexed function or method found at the current cursor position.');
+                this.provider.postMessage({
+                    command: 'functionSummaryError',
+                    message: 'No indexed function or method found at the current cursor position.'
+                });
+                return;
+            }
+
+            this.provider.postMessage({
+                command: 'functionSummaryGenerated',
+                ...summaryData
+            });
+            vscode.window.showInformationMessage(`Generated summary: ${summaryData.label}`);
+        } catch (error: any) {
+            const message = error?.message || String(error);
+            this.provider.postMessage({
+                command: 'functionSummaryError',
+                message
+            });
+            vscode.window.showErrorMessage(`Failed to summarize active function: ${message}`);
+        }
+    }
+
     public handleEditorSelectionChanged(editor: vscode.TextEditor | undefined): void {
         if (this.cursorCandidateTimer) {
             clearTimeout(this.cursorCandidateTimer);

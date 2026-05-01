@@ -46,6 +46,14 @@ export interface FunctionRef {
     pendingGraphNode?: boolean;
 }
 
+export interface FunctionSummaryData {
+    nodeId: string;
+    label: string;
+    summary: string;
+    modelId?: string;
+    generatedAt: string;
+}
+
 export interface GraphNodeRef {
     id: string;
     label: string;

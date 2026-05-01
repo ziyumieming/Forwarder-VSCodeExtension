@@ -132,6 +132,13 @@
             </div>
             <div id="call-path-chip-list" class="call-path-chip-list" aria-label="Ordered function path"></div>
         </section>
+        <section id="path-summary-panel" class="path-summary-panel" hidden aria-label="Call Path Summary">
+            <div class="path-summary-header">
+                <span class="path-summary-title">Path Summary</span>
+                <button id="btn-path-summary-close" class="nav-btn call-path-icon-btn" type="button" aria-label="Close path summary">x</button>
+            </div>
+            <div id="path-summary-content" class="path-summary-content"></div>
+        </section>
         <div id="call-path-chip-menu" class="call-context-menu" hidden role="menu" aria-label="Call path chip actions">
             <button type="button" data-path-chip-action="center">Set as Center</button>
             <button type="button" data-path-chip-action="remove">Remove</button>
@@ -154,6 +161,8 @@
     <script nonce="{{nonce}}" src="{{moduleTabManagerScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleSelectionStoreScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleCallPathTrayScriptUri}}"></script>
+    <script nonce="{{nonce}}" src="{{moduleSummaryStoreScriptUri}}"></script>
+    <script nonce="{{nonce}}" src="{{moduleSummaryPopoverScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleCursorNodeHighlightScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleQueryServiceScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleGraphIncrementalScriptUri}}"></script>

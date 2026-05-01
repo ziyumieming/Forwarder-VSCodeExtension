@@ -1,6 +1,11 @@
 import * as vscode from 'vscode';
 import { logger } from '../utils/logger';
 
+export interface LLMPromptResult {
+    text: string;
+    modelId?: string;
+}
+
 export class LLMService {
 
     /**
@@ -38,35 +43,40 @@ export class LLMService {
         }
     }
 
-    public static async summarizeFunction(funcName: string, code: string): Promise<string> {
+    public static async sendPrompt(prompt: string, token?: vscode.CancellationToken): Promise<LLMPromptResult> {
         try {
             const { models, diagnosticInfo } = await this.getAvailableModels();
             logger.info(diagnosticInfo);
 
             const model = models[0];
             if (!model) {
-                return `未找到可用的 AI 模型。\n\n诊断信息：\n${diagnosticInfo}\n请确保已安装并登录 GitHub Copilot Chat 插件。`;
+                throw new Error(`未找到可用的 AI 模型。\n\n诊断信息：\n${diagnosticInfo}\n请确保已安装并登录 GitHub Copilot Chat 插件。`);
             }
 
             const messages = [
-                vscode.LanguageModelChatMessage.User(
-                    `你是一个资深编程专家。请用一段话总结以下名为 "${funcName}" 的函数的功能，并使用 Markdown 格式返回。代码如下：\n\n${code}`
-                )
+                vscode.LanguageModelChatMessage.User(prompt)
             ];
 
-            const response = await model.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
+            const fallbackTokenSource = token ? undefined : new vscode.CancellationTokenSource();
+            try {
+                const response = await model.sendRequest(messages, {}, token || fallbackTokenSource!.token);
 
-            // 读取流式结果（为了简单，我们先合并成完整文本）
-            let fullResponse = "";
-            for await (const fragment of response.text) {
-                fullResponse += fragment;
+                let fullResponse = "";
+                for await (const fragment of response.text) {
+                    fullResponse += fragment;
+                }
+
+                return {
+                    text: fullResponse,
+                    modelId: model.id
+                };
+            } finally {
+                fallbackTokenSource?.dispose();
             }
 
-            return fullResponse;
-
-        } catch (err) {
-            console.error(err);
-            return "AI 分析过程中发生了错误。";
+        } catch (err: any) {
+            logger.error(`[LLMService] AI request failed: ${err?.message || err}`);
+            throw err;
         }
     }
 }

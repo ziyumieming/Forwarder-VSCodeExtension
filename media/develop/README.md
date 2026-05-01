@@ -103,6 +103,14 @@ Queries return immediately after the backend snapshot is loaded. If the analysis
 - Class graph method clicks and the editor command `forwarder.addFunctionToCallPath` add functions to the shared tray without forcing a tab switch. The editor command `forwarder.setFunctionAsCallCenter` switches to Call Graph and sets the cursor function as center without auto-querying.
 - Relation Graph and Call Graph share one Cytoscape canvas, but each tab captures its own elements, viewport, render mode, and center state before switching. Returning to a tab restores its previous view instead of re-querying or clearing the canvas.
 
+## Function Summary Shell
+
+- The debug command `forwarder.debug.summarizeActiveFunction` resolves the function or method under the editor cursor and asks the VS Code Language Model API for a Markdown summary.
+- First-version function summaries use only the function name, signature, file/language, and source code range. Call graph context, class summaries, path summaries, caching, persistence, and Graph-RAG inputs are reserved for later work.
+- Generated summaries are kept only in the Webview session by `summary-store.js`. Hovering a graph node with a stored summary shows `summary-popover.js`; nodes without summaries do not trigger LLM requests.
+- Center class-card summaries are only shown when hovering the card title/header action area. Member rows keep their existing reveal/path interactions.
+- `path-summary-panel` is present as a future display target for call path summaries; it is not populated by the first-version function summary command.
+
 ## Consistency Guardrails
 
 The frontend includes DOM/Cytoscape consistency checks for center-card rendering.

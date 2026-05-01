@@ -49,6 +49,10 @@
       {
         "command": "forwarder.debug.clearAndRebuild",
         "title": "Debug: 清空并重建代码图"
+      },
+      {
+        "command": "forwarder.debug.summarizeActiveFunction",
+        "title": "Debug: 生成当前函数摘要"
       }
     ],
     "viewsContainers": {

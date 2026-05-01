@@ -41,6 +41,8 @@
     const tabManagerModule = window.AnalysisModules?.TabManager;
     const selectionStoreModule = window.AnalysisModules?.SelectionStore;
     const callPathTrayModule = window.AnalysisModules?.CallPathTray;
+    const summaryStoreModule = window.AnalysisModules?.SummaryStore;
+    const summaryPopoverModule = window.AnalysisModules?.SummaryPopover;
     const cursorNodeHighlightModule = window.AnalysisModules?.CursorNodeHighlight;
     const queryServiceModule = window.AnalysisModules?.QueryService;
     const graphIncrementalModule = window.AnalysisModules?.GraphIncremental;
@@ -53,6 +55,7 @@
     let relationGraphTab = null;
     let callGraphTab = null;
     let callPathTray = null;
+    let summaryPopover = null;
     let cursorNodeHighlight = null;
     let classCardMemberContext = null;
     let suppressRelationGraphContextUntil = 0;
@@ -130,6 +133,66 @@
 
         log('general', 'error', args[0], { details: args[1] });
     };
+
+    function ensureSummaryPopover() {
+        if (!summaryPopover
+            && summaryPopoverModule
+            && typeof summaryPopoverModule.create === 'function') {
+            summaryPopover = summaryPopoverModule.create({ log });
+        }
+
+        return summaryPopover;
+    }
+
+    function showSummaryForNodeId(nodeId, point, source) {
+        if (!summaryStoreModule || typeof summaryStoreModule.get !== 'function') {
+            return false;
+        }
+
+        const record = summaryStoreModule.get(nodeId);
+        if (!record) {
+            return false;
+        }
+
+        const popover = ensureSummaryPopover();
+        if (!popover || typeof popover.show !== 'function') {
+            return false;
+        }
+
+        popover.show(record, point || { x: 80, y: 80 });
+        log('state', 'verbose', 'summary hover shown', {
+            source: source || 'unknown',
+            nodeId
+        });
+        return true;
+    }
+
+    function hideSummaryPopover(delayMs = 80) {
+        if (summaryPopover && typeof summaryPopover.hide === 'function') {
+            summaryPopover.hide(delayMs);
+        }
+    }
+
+    function pointFromCyEvent(event) {
+        const originalEvent = event?.originalEvent;
+        if (originalEvent && Number.isFinite(originalEvent.clientX) && Number.isFinite(originalEvent.clientY)) {
+            return {
+                x: originalEvent.clientX,
+                y: originalEvent.clientY
+            };
+        }
+
+        const renderedPosition = event?.renderedPosition;
+        const rect = cy?.container()?.getBoundingClientRect?.();
+        if (renderedPosition && rect) {
+            return {
+                x: rect.left + renderedPosition.x,
+                y: rect.top + renderedPosition.y
+            };
+        }
+
+        return { x: 80, y: 80 };
+    }
 
     function createCyInstance() {
         return cytoscape({
@@ -1380,6 +1443,53 @@
         hideClassCardMemberMenu();
     });
 
+    cy.on('mouseover', 'node', function (event) {
+        const nodeId = event?.target && typeof event.target.id === 'function'
+            ? event.target.id()
+            : null;
+        if (nodeId) {
+            showSummaryForNodeId(nodeId, pointFromCyEvent(event), 'graph-node');
+        }
+    });
+    cy.on('mouseout', 'node', function () {
+        hideSummaryPopover(90);
+    });
+
+    document.addEventListener('mouseover', function (event) {
+        const target = event.target;
+        const header = target && typeof target.closest === 'function'
+            ? target.closest('.analysis-class-card-header-action[data-node-id]')
+            : null;
+        if (!header) {
+            return;
+        }
+
+        showSummaryForNodeId(header.dataset.nodeId, {
+            x: event.clientX,
+            y: event.clientY
+        }, 'class-card-header');
+    });
+    document.addEventListener('mouseout', function (event) {
+        const target = event.target;
+        const header = target && typeof target.closest === 'function'
+            ? target.closest('.analysis-class-card-header-action[data-node-id]')
+            : null;
+        if (header) {
+            hideSummaryPopover(90);
+        }
+    });
+
+    document.getElementById('btn-path-summary-close')?.addEventListener('click', function () {
+        const panel = document.getElementById('path-summary-panel');
+        const tray = document.getElementById('call-path-tray');
+        if (panel) {
+            panel.hidden = true;
+        }
+        if (tray) {
+            tray.hidden = false;
+        }
+    });
+
     // 监听来自后端的消息
     window.addEventListener('message', (event) => {
         const data = event.data;
@@ -1459,6 +1569,33 @@
 
         if (data.command === 'analysisIndexStatusChanged') {
             updateIndexStatusBanner(data.status || null);
+            return;
+        }
+
+        if (data.command === 'functionSummaryGenerated') {
+            if (summaryStoreModule && typeof summaryStoreModule.set === 'function') {
+                summaryStoreModule.set({
+                    nodeId: data.nodeId,
+                    label: data.label,
+                    summary: data.summary,
+                    modelId: data.modelId,
+                    generatedAt: data.generatedAt
+                }, 'backend');
+                log('summary', 'info', 'function summary stored', {
+                    nodeId: data.nodeId,
+                    label: data.label,
+                    modelId: data.modelId || null
+                });
+            }
+            return;
+        }
+
+        if (data.command === 'functionSummaryError') {
+            log('summary', 'error', 'function summary failed', {
+                nodeId: data.nodeId || null,
+                label: data.label || null,
+                message: data.message || 'Unknown summary error'
+            });
             return;
         }
 

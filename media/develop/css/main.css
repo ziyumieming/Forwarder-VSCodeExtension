@@ -676,6 +676,109 @@ body {
     background: rgba(35, 72, 101, 0.72);
 }
 
+.summary-popover {
+    position: fixed;
+    width: min(360px, calc(100vw - 24px));
+    max-height: min(46vh, 360px);
+    overflow: auto;
+    padding: 10px 12px;
+    border: 1px solid rgba(190, 221, 243, 0.34);
+    border-radius: 10px;
+    background: rgba(9, 18, 30, 0.94);
+    box-shadow: 0 14px 42px rgba(0, 0, 0, 0.38);
+    color: var(--text-main);
+    z-index: 30;
+    backdrop-filter: blur(8px);
+}
+
+.summary-popover[hidden] {
+    display: none;
+}
+
+.summary-popover-title {
+    margin-bottom: 7px;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.summary-popover-body {
+    display: grid;
+    gap: 7px;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.summary-popover-body p {
+    margin: 0;
+}
+
+.summary-popover-body ul {
+    margin: 0;
+    padding-left: 18px;
+}
+
+.summary-popover-heading {
+    color: var(--text-main);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.summary-popover-meta {
+    margin-top: 8px;
+    border-top: 1px solid rgba(190, 221, 243, 0.16);
+    padding-top: 6px;
+    color: rgba(153, 178, 201, 0.74);
+    font-size: 10px;
+}
+
+.path-summary-panel {
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    bottom: 14px;
+    max-height: min(34vh, 180px);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid var(--stroke);
+    border-radius: 12px;
+    background: rgba(8, 19, 31, 0.82);
+    backdrop-filter: blur(6px);
+    z-index: 9;
+}
+
+.path-summary-panel[hidden] {
+    display: none;
+}
+
+.path-summary-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.path-summary-title {
+    flex: 1 1 auto;
+    color: var(--text-sub);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.path-summary-content {
+    min-height: 32px;
+    overflow: auto;
+    color: var(--text-main);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
 @media (max-width: 940px) {
     .tab-toolbar {
         flex: 1 1 100%;
