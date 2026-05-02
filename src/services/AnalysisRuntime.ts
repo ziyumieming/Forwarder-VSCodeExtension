@@ -9,6 +9,11 @@ import { SourceLocationService } from './SourceLocationServices';
 import { AnalysisIndexStatusService } from './AnalysisIndexStatusServices';
 import { logger } from '../utils/logger';
 import { SummaryService } from './SummaryServices';
+import { SummaryStorageService } from './SummaryStorageServices';
+import { SummaryCacheService } from './SummaryCacheServices';
+import { SummaryQueueService } from './SummaryQueueServices';
+import { LLMModelInfo, LLMModelService } from './LLMModelServices';
+import { SummaryContextService } from './SummaryContextServices';
 
 export interface AnalysisTask {
     uri: vscode.Uri;
@@ -42,6 +47,11 @@ export class AnalysisRuntime {
     private queueIdleResolvers: (() => void)[] = [];
 
     private readonly indexStatusService = new AnalysisIndexStatusService();
+    private summaryStorageService?: SummaryStorageService;
+    private summaryCacheService?: SummaryCacheService;
+    private summaryQueueService?: SummaryQueueService;
+    private llmModelService?: LLMModelService;
+    private llmInitialization?: Promise<void>;
 
     private constructor() {
         this.projectGraph = new ProjectGraph();
@@ -84,6 +94,7 @@ export class AnalysisRuntime {
      */
     public initialize(storageDir: string, isSingleFileMode: boolean = false, singleFileUri?: string) {
         this.syncService = new SynchronizationService(storageDir, isSingleFileMode, singleFileUri);
+        this.initializeLLMSupport(storageDir);
 
         // 注册设置修改监听器
         if (this.configChangeListener) {
@@ -102,6 +113,10 @@ export class AnalysisRuntime {
                 this.runIncrementalSync().catch(err => {
                     logger.info(`[AnalysisRuntime] 重新扫描失败: ${err}`);
                 });
+            }
+            if (e.affectsConfiguration('forwarder.llm.defaultModelName') ||
+                e.affectsConfiguration('forwarder.llm.summaryConcurrency')) {
+                this.initializeLLMSupport(storageDir);
             }
         });
 
@@ -535,7 +550,54 @@ export class AnalysisRuntime {
             return undefined;
         }
 
-        return SummaryService.summarizeFunction(this.projectGraph, functionRef.id);
+        return this.queryFunctionSummary(functionRef.id, false);
+    }
+
+    public async queryFunctionSummary(nodeId: string, forceRefresh: boolean = false): Promise<FunctionSummaryData> {
+        logger.info(`[AnalysisRuntime] queryFunctionSummary received: nodeId=${nodeId}, forceRefresh=${forceRefresh}`);
+        await this.indexStatusService.waitForSnapshotReady();
+        logger.info(`[AnalysisRuntime] queryFunctionSummary snapshot ready: nodeId=${nodeId}`);
+        await this.ensureLLMSupportReady();
+        logger.info(`[AnalysisRuntime] queryFunctionSummary LLM support ready: nodeId=${nodeId}`);
+
+        const result = await SummaryService.summarizeFunction(this.projectGraph, nodeId, undefined, {
+            cacheService: this.summaryCacheService,
+            queueService: this.summaryQueueService,
+            modelService: this.llmModelService,
+            forceRefresh
+        });
+        logger.info(`[AnalysisRuntime] queryFunctionSummary completed: nodeId=${nodeId}, status=${result.cacheStatus}, stale=${result.stale === true}, model=${result.modelName || result.modelId || '<unknown>'}`);
+        return result;
+    }
+
+    public async getFunctionSummaryHistory(nodeId: string, modelName?: string): Promise<{ nodeId: string; records: FunctionSummaryData[] }> {
+        await this.indexStatusService.waitForSnapshotReady();
+        await this.ensureLLMSupportReady();
+        if (!this.summaryCacheService || !this.llmModelService) {
+            return { nodeId, records: [] };
+        }
+
+        const context = await SummaryContextService.buildFunctionContext(this.projectGraph, nodeId);
+        return this.summaryCacheService.getFunctionSummaryHistory({
+            nodeId,
+            modelName,
+            promptVersion: SummaryService.FUNCTION_PROMPT_VERSION,
+            currentBodyHash: context.bodyHash
+        });
+    }
+
+    public async listLLMModels(): Promise<{ models: LLMModelInfo[]; selectedModelName: string }> {
+        await this.ensureLLMSupportReady();
+        return {
+            models: this.llmModelService?.listModels() || [],
+            selectedModelName: this.llmModelService?.getSelectedModelName() || ''
+        };
+    }
+
+    public async setLLMModel(modelName: string): Promise<{ models: LLMModelInfo[]; selectedModelName: string }> {
+        await this.ensureLLMSupportReady();
+        await this.llmModelService?.setSelectedModelName(modelName);
+        return this.listLLMModels();
     }
 
     public async resolveGraphNodeAtEditorPosition(
@@ -636,6 +698,36 @@ export class AnalysisRuntime {
     private resetSnapshotReadyPromise(): void {
         this.indexStatusService.resetSnapshotReady();
         this.emitIndexStatus();
+    }
+
+    private initializeLLMSupport(storageDir: string): void {
+        const configuration = vscode.workspace.getConfiguration('forwarder.llm');
+        const defaultModelName = String(configuration.get('defaultModelName', '') || '');
+        const concurrency = Number(configuration.get('summaryConcurrency', 2) || 2);
+
+        this.summaryStorageService = new SummaryStorageService(storageDir);
+        this.summaryCacheService = new SummaryCacheService(this.summaryStorageService);
+        this.summaryQueueService = new SummaryQueueService(concurrency);
+        this.llmModelService = new LLMModelService({
+            storageDir,
+            configuredDefaultModelName: defaultModelName
+        });
+
+        this.llmInitialization = (async () => {
+            await this.summaryStorageService!.initialize();
+            await this.llmModelService!.initialize();
+            logger.info(`[AnalysisRuntime] LLM support ready: storageDir=${storageDir}, summaryIndex=${this.summaryStorageService!.getIndexPath()}, concurrency=${concurrency}`);
+        })().catch(error => {
+            logger.warn(`[AnalysisRuntime] LLM support initialization failed: ${error?.message || error}`);
+            throw error;
+        });
+    }
+
+    private async ensureLLMSupportReady(): Promise<void> {
+        if (!this.llmInitialization) {
+            throw new Error('LLM support is not initialized.');
+        }
+        await this.llmInitialization;
     }
 
     /**

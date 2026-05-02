@@ -105,9 +105,14 @@ Queries return immediately after the backend snapshot is loaded. If the analysis
 
 ## Function Summary Shell
 
-- The debug command `forwarder.debug.summarizeActiveFunction` resolves the function or method under the editor cursor and asks the VS Code Language Model API for a Markdown summary.
-- First-version function summaries use only the function name, signature, file/language, and source code range. Call graph context, class summaries, path summaries, caching, persistence, and Graph-RAG inputs are reserved for later work.
-- Generated summaries are kept only in the Webview session by `summary-store.js`. Hovering a graph node with a stored summary shows `summary-popover.js`; nodes without summaries do not trigger LLM requests.
+- The debug command `forwarder.debug.summarizeActiveFunction` resolves the function or method under the editor cursor and uses the same cache-first summary query path as the Webview.
+- Function summaries use only the function name, signature, file/language, and source code range. Call graph context, class summaries, path summaries, batch JSON schema generation, and Graph-RAG inputs remain reserved for later work.
+- Summary storage is separated from graph snapshots. Startup loads `summaries/summary_index.json`; summary bodies in `summaries/bodies/` are lazy-loaded only when a cache hit is actually displayed or queried.
+- Cache matching is keyed by target, configured model display name, prompt version, and function body hash. Stale summaries are still displayable and are marked in the popover; stale does not trigger automatic regeneration unless the user explicitly refreshes.
+- The backend keeps at most the latest three successful records for each function/model/prompt combination. `SummaryQueueServices` merges identical pending requests and limits generation concurrency.
+- Model selection is by stable display name (`vendor/family/id`). The backend maintains `llm_models_manifest.json`; the title text remains unchanged, but the title area opens a model menu with the selected item marked.
+- Hovering a graph node with a stored summary shows `summary-popover.js`; nodes without summaries do not trigger LLM requests. Long-pressing function/method nodes requests a summary, while class-node summary entry points are reserved.
+- `summary-store.js` keeps per-node model and history records for the current Webview session and supports model/history switching controls in the popover.
 - Center class-card summaries are only shown when hovering the card title/header action area. Member rows keep their existing reveal/path interactions.
 - `path-summary-panel` is present as a future display target for call path summaries; it is not populated by the first-version function summary command.
 

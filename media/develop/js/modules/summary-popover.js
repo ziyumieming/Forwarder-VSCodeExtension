@@ -60,8 +60,11 @@
     function create(context) {
         var safeContext = context || {};
         var log = typeof safeContext.log === 'function' ? safeContext.log : function () { };
+        var store = safeContext.summaryStore || null;
+        var onRefresh = typeof safeContext.onRefresh === 'function' ? safeContext.onRefresh : function () { };
         var root = document.getElementById('summary-popover');
         var hideTimer = null;
+        var currentRecord = null;
 
         if (!root) {
             root = document.createElement('div');
@@ -85,6 +88,7 @@
             if (!record || !record.summary) {
                 return false;
             }
+            currentRecord = record;
 
             if (hideTimer) {
                 clearTimeout(hideTimer);
@@ -92,10 +96,21 @@
             }
 
             root.innerHTML = [
+                '<div class="summary-popover-head">',
+                '<button class="summary-popover-nav" type="button" data-summary-action="prev-model" title="Previous model cache">&lt;</button>',
                 '<div class="summary-popover-title">' + escapeHtml(record.label || record.nodeId) + '</div>',
+                record.stale ? '<span class="summary-stale-badge" title="Source changed after this summary was generated">STALE</span>' : '',
+                '<button class="summary-popover-nav" type="button" data-summary-action="next-model" title="Next model cache">&gt;</button>',
+                '</div>',
                 '<div class="summary-popover-body">' + renderMarkdownSubset(record.summary) + '</div>',
+                '<div class="summary-popover-controls">',
+                '<button class="summary-popover-nav" type="button" data-summary-action="prev-history" title="Previous summary history">&lt;</button>',
+                '<span class="summary-popover-history">' + escapeHtml('History ' + ((record.historyIndex || 0) + 1) + '/' + (record.historyCount || 1)) + '</span>',
+                '<button class="summary-popover-nav" type="button" data-summary-action="next-history" title="Next summary history">&gt;</button>',
+                '<button class="summary-popover-refresh" type="button" data-summary-action="refresh">Refresh</button>',
+                '</div>',
                 record.modelId || record.generatedAt
-                    ? '<div class="summary-popover-meta">' + escapeHtml([record.modelId, record.generatedAt].filter(Boolean).join(' - ')) + '</div>'
+                    ? '<div class="summary-popover-meta">' + escapeHtml([record.modelName, record.modelId, record.cacheStatus, record.generatedAt].filter(Boolean).join(' - ')) + '</div>'
                     : ''
             ].join('');
             root.hidden = false;
@@ -126,6 +141,34 @@
         });
         root.addEventListener('mouseleave', function () {
             hide(80);
+        });
+        root.addEventListener('click', function (event) {
+            var action = event.target && event.target.dataset ? event.target.dataset.summaryAction : null;
+            if (!action || !currentRecord) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            var nextRecord = null;
+            if (action === 'prev-model' && store && typeof store.setModel === 'function') {
+                nextRecord = store.setModel(currentRecord.nodeId, -1);
+            } else if (action === 'next-model' && store && typeof store.setModel === 'function') {
+                nextRecord = store.setModel(currentRecord.nodeId, 1);
+            } else if (action === 'prev-history' && store && typeof store.setHistory === 'function') {
+                nextRecord = store.setHistory(currentRecord.nodeId, -1);
+            } else if (action === 'next-history' && store && typeof store.setHistory === 'function') {
+                nextRecord = store.setHistory(currentRecord.nodeId, 1);
+            } else if (action === 'refresh') {
+                onRefresh(currentRecord);
+            }
+
+            if (nextRecord) {
+                show(nextRecord, {
+                    x: root.getBoundingClientRect().left,
+                    y: root.getBoundingClientRect().top
+                });
+            }
         });
 
         return {

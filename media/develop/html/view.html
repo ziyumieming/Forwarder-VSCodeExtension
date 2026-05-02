@@ -14,9 +14,10 @@
     <div class="background-glow" aria-hidden="true"></div>
 
     <nav class="top-nav">
-        <div class="left">
+        <div id="llm-model-trigger" class="left model-trigger" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" title="Select summary model">
             <span class="brand-dot"></span>
             <span class="brand">Forwarder Analysis</span>
+            <div id="llm-model-menu" class="llm-model-menu" hidden role="menu" aria-label="Summary Model"></div>
         </div>
         <div class="tab-strip" role="tablist" aria-label="Analysis Views">
             <button class="tab-btn is-active" type="button" role="tab" aria-selected="true"

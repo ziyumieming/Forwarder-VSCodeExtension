@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import { IRNode } from '../models/GraphDefinition';
 import { ProjectGraph } from '../models/GraphManager';
 import { SourceLocationService } from './SourceLocationServices';
@@ -12,6 +13,7 @@ export interface FunctionSummaryContext {
     fileName: string;
     languageId: string;
     sourceCode: string;
+    bodyHash: string;
 }
 
 export class SummaryContextService {
@@ -37,7 +39,8 @@ export class SummaryContextService {
             namespace: node.namespace,
             fileName: SourceLocationService.summarizeUri(node.location.uri),
             languageId: document.languageId,
-            sourceCode
+            sourceCode,
+            bodyHash: this.hashSource(sourceCode)
         };
     }
 
@@ -55,5 +58,9 @@ export class SummaryContextService {
             new vscode.Position(range.start.line, range.start.character),
             new vscode.Position(range.end.line, range.end.character)
         );
+    }
+
+    private static hashSource(sourceCode: string): string {
+        return crypto.createHash('sha256').update(sourceCode, 'utf8').digest('hex');
     }
 }

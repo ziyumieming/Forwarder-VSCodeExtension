@@ -59,6 +59,10 @@
     let cursorNodeHighlight = null;
     let classCardMemberContext = null;
     let suppressRelationGraphContextUntil = 0;
+    let llmModels = [];
+    let selectedLLMModelName = '';
+    const SUMMARY_LONG_PRESS_MS = 650;
+    let summaryHoldState = null;
 
     if (graphIncrementalModule && typeof graphIncrementalModule.createEmptyGraphSnapshot === 'function') {
         latestGraphSnapshot = graphIncrementalModule.createEmptyGraphSnapshot();
@@ -138,7 +142,19 @@
         if (!summaryPopover
             && summaryPopoverModule
             && typeof summaryPopoverModule.create === 'function') {
-            summaryPopover = summaryPopoverModule.create({ log });
+            summaryPopover = summaryPopoverModule.create({
+                log,
+                summaryStore: summaryStoreModule,
+                onRefresh: (record) => {
+                    if (record && record.nodeId) {
+                        vscode.postMessage({
+                            command: 'queryFunctionSummary',
+                            nodeId: record.nodeId,
+                            forceRefresh: true
+                        });
+                    }
+                }
+            });
         }
 
         return summaryPopover;
@@ -151,11 +167,19 @@
 
         const record = summaryStoreModule.get(nodeId);
         if (!record) {
+            log('summary', 'verbose', 'summary hover miss', {
+                source: source || 'unknown',
+                nodeId
+            });
             return false;
         }
 
         const popover = ensureSummaryPopover();
         if (!popover || typeof popover.show !== 'function') {
+            log('summary', 'error', 'summary popover unavailable', {
+                source: source || 'unknown',
+                nodeId
+            });
             return false;
         }
 
@@ -192,6 +216,125 @@
         }
 
         return { x: 80, y: 80 };
+    }
+
+    function renderLLMModelMenu() {
+        const menu = document.getElementById('llm-model-menu');
+        if (!menu) {
+            return;
+        }
+
+        if (!Array.isArray(llmModels) || llmModels.length === 0) {
+            menu.innerHTML = '<button class="llm-model-option" type="button" disabled>No models available</button>';
+            return;
+        }
+
+        menu.innerHTML = llmModels.map((model) => {
+            const name = String(model.modelName || model.id || '');
+            const selected = name === selectedLLMModelName;
+            return [
+                '<button class="llm-model-option' + (selected ? ' is-selected' : '') + '" type="button" role="menuitem" data-model-name="' + escapeHtmlAttribute(name) + '">',
+                '<span>' + escapeHtml(name) + '</span>',
+                selected ? '<span class="llm-model-option-mark">selected</span>' : '',
+                '</button>'
+            ].join('');
+        }).join('');
+    }
+
+    function toggleLLMModelMenu(forceOpen) {
+        const trigger = document.getElementById('llm-model-trigger');
+        const menu = document.getElementById('llm-model-menu');
+        if (!trigger || !menu) {
+            return;
+        }
+        const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : menu.hidden;
+        menu.hidden = !shouldOpen;
+        trigger.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+        if (shouldOpen) {
+            renderLLMModelMenu();
+        }
+    }
+
+    function escapeHtml(text) {
+        return String(text || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function escapeHtmlAttribute(text) {
+        return escapeHtml(text).replace(/`/g, '&#96;');
+    }
+
+    function getNodeKind(node) {
+        if (!node || typeof node.data !== 'function') {
+            return '';
+        }
+        return String(node.data('nodeKind') || node.data('type') || '');
+    }
+
+    function isFunctionSummaryTarget(node) {
+        const kind = getNodeKind(node);
+        return kind === 'function' || kind === 'method';
+    }
+
+    function cancelSummaryHold(reason) {
+        if (!summaryHoldState) {
+            return;
+        }
+        if (summaryHoldState.timer) {
+            clearTimeout(summaryHoldState.timer);
+        }
+        if (summaryHoldState.node && typeof summaryHoldState.node.removeClass === 'function') {
+            summaryHoldState.node.removeClass('summary-hold-pending');
+        }
+        log('summary', 'verbose', 'summary hold canceled', {
+            reason,
+            nodeId: summaryHoldState.nodeId
+        });
+        summaryHoldState = null;
+    }
+
+    function startSummaryHold(event) {
+        const node = event?.target;
+        if (!node || typeof node.id !== 'function') {
+            return;
+        }
+
+        cancelSummaryHold('new-hold');
+        const nodeId = node.id();
+        const kind = getNodeKind(node);
+        const point = pointFromCyEvent(event);
+        node.addClass('summary-hold-pending');
+        summaryHoldState = {
+            node,
+            nodeId,
+            kind,
+            timer: setTimeout(function () {
+                const current = summaryHoldState;
+                summaryHoldState = null;
+                node.removeClass('summary-hold-pending');
+                if (kind === 'class' || kind === 'interface') {
+                    log('summary', 'info', 'class summary is reserved for a later phase', { nodeId, kind });
+                    return;
+                }
+                if (!isFunctionSummaryTarget(node)) {
+                    return;
+                }
+                vscode.postMessage({
+                    command: 'queryFunctionSummary',
+                    nodeId,
+                    forceRefresh: false
+                });
+                log('summary', 'info', 'function summary requested by long press', {
+                    nodeId,
+                    point,
+                    requestState: !!current
+                });
+            }, SUMMARY_LONG_PRESS_MS)
+        };
     }
 
     function createCyInstance() {
@@ -1404,6 +1547,43 @@
         updateIndexStatusBanner({ ...(latestIndexStatus || {}), suggestRequery: false });
     });
 
+    document.getElementById('llm-model-trigger')?.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleLLMModelMenu();
+        vscode.postMessage({ command: 'listLLMModels' });
+    });
+    document.getElementById('llm-model-trigger')?.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            toggleLLMModelMenu();
+            vscode.postMessage({ command: 'listLLMModels' });
+        }
+    });
+    document.getElementById('llm-model-menu')?.addEventListener('click', function (event) {
+        const button = event.target && typeof event.target.closest === 'function'
+            ? event.target.closest('[data-model-name]')
+            : null;
+        if (!button) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        vscode.postMessage({
+            command: 'setLLMModel',
+            modelName: button.dataset.modelName
+        });
+        toggleLLMModelMenu(false);
+    });
+    document.addEventListener('click', function (event) {
+        const trigger = document.getElementById('llm-model-trigger');
+        if (trigger && trigger.contains(event.target)) {
+            return;
+        }
+        toggleLLMModelMenu(false);
+    });
+    vscode.postMessage({ command: 'listLLMModels' });
+
     const classCardMemberMenu = document.getElementById('class-card-member-menu');
     classCardMemberMenu?.addEventListener('click', function (event) {
         const action = event.target && event.target.dataset ? event.target.dataset.classMemberAction : null;
@@ -1453,6 +1633,14 @@
     });
     cy.on('mouseout', 'node', function () {
         hideSummaryPopover(90);
+        cancelSummaryHold('node-mouseout');
+    });
+    cy.on('mousedown tapstart', 'node', startSummaryHold);
+    cy.on('mouseup tapend free drag', 'node', function () {
+        cancelSummaryHold('node-release-or-drag');
+    });
+    cy.on('pan zoom dragfree', function () {
+        cancelSummaryHold('canvas-move');
     });
 
     document.addEventListener('mouseover', function (event) {
@@ -1572,20 +1760,54 @@
             return;
         }
 
-        if (data.command === 'functionSummaryGenerated') {
+        if (data.command === 'llmModelsChanged') {
+            llmModels = Array.isArray(data.models) ? data.models : [];
+            selectedLLMModelName = String(data.selectedModelName || '');
+            renderLLMModelMenu();
+            return;
+        }
+
+        if (data.command === 'functionSummaryData' || data.command === 'functionSummaryGenerated') {
             if (summaryStoreModule && typeof summaryStoreModule.set === 'function') {
-                summaryStoreModule.set({
+                const stored = summaryStoreModule.set({
                     nodeId: data.nodeId,
                     label: data.label,
                     summary: data.summary,
+                    modelName: data.modelName,
                     modelId: data.modelId,
-                    generatedAt: data.generatedAt
+                    generatedAt: data.generatedAt,
+                    bodyHash: data.bodyHash,
+                    stale: data.stale,
+                    cacheStatus: data.cacheStatus,
+                    historyIndex: data.historyIndex,
+                    historyCount: data.historyCount,
+                    promptVersion: data.promptVersion
                 }, 'backend');
                 log('summary', 'info', 'function summary stored', {
                     nodeId: data.nodeId,
                     label: data.label,
-                    modelId: data.modelId || null
+                    modelId: data.modelId || null,
+                    modelName: data.modelName || null,
+                    cacheStatus: data.cacheStatus || null,
+                    stale: data.stale === true
                 });
+                if (stored) {
+                    vscode.postMessage({
+                        command: 'getFunctionSummaryHistory',
+                        nodeId: data.nodeId
+                    });
+                    const popover = ensureSummaryPopover();
+                    if (popover && typeof popover.show === 'function') {
+                        popover.show(stored, { x: 88, y: 88 });
+                    }
+                }
+            }
+            return;
+        }
+
+        if (data.command === 'functionSummaryHistory') {
+            if (summaryStoreModule && typeof summaryStoreModule.setHistoryRecords === 'function') {
+                summaryStoreModule.setHistoryRecords(data.nodeId, data.records, 'backend-history');
             }
             return;
         }

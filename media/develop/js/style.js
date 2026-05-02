@@ -116,6 +116,16 @@
                     }
                 },
                 {
+                    selector: 'node.summary-hold-pending',
+                    style: {
+                        'border-width': 5,
+                        'border-color': '#ffc869',
+                        'shadow-blur': 22,
+                        'shadow-color': '#f3b23a',
+                        'shadow-opacity': 0.75
+                    }
+                },
+                {
                     selector: 'edge',
                     style: {
                         width: 1.6,

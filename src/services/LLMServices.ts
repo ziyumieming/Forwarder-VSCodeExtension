@@ -79,4 +79,33 @@ export class LLMService {
             throw err;
         }
     }
+
+    public static async sendPromptWithModel(
+        model: vscode.LanguageModelChat,
+        prompt: string,
+        token?: vscode.CancellationToken
+    ): Promise<LLMPromptResult> {
+        const messages = [
+            vscode.LanguageModelChatMessage.User(prompt)
+        ];
+        const fallbackTokenSource = token ? undefined : new vscode.CancellationTokenSource();
+
+        try {
+            const response = await model.sendRequest(messages, {}, token || fallbackTokenSource!.token);
+            let fullResponse = "";
+            for await (const fragment of response.text) {
+                fullResponse += fragment;
+            }
+
+            return {
+                text: fullResponse,
+                modelId: model.id
+            };
+        } catch (err: any) {
+            logger.error(`[LLMService] AI request failed: ${err?.message || err}`);
+            throw err;
+        } finally {
+            fallbackTokenSource?.dispose();
+        }
+    }
 }

@@ -51,7 +51,14 @@ export interface FunctionSummaryData {
     label: string;
     summary: string;
     modelId?: string;
+    modelName?: string;
     generatedAt: string;
+    bodyHash?: string;
+    stale?: boolean;
+    cacheStatus?: 'memory-hit' | 'index-disk-hit' | 'generated' | 'force-regenerated' | 'error';
+    historyIndex?: number;
+    historyCount?: number;
+    promptVersion?: string;
 }
 
 export interface GraphNodeRef {

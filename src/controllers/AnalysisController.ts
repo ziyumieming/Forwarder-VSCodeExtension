@@ -93,6 +93,68 @@ export class AnalysisController {
                 break;
             }
 
+            case 'listLLMModels': {
+                const result = await this.runtime.listLLMModels();
+                this.provider.postMessage({
+                    command: 'llmModelsChanged',
+                    ...result
+                });
+                break;
+            }
+
+            case 'setLLMModel': {
+                const result = await this.runtime.setLLMModel(String(data.modelName || ''));
+                this.provider.postMessage({
+                    command: 'llmModelsChanged',
+                    ...result
+                });
+                break;
+            }
+
+            case 'queryFunctionSummary': {
+                logger.info(`[AnalysisController] queryFunctionSummary nodeId=${data.nodeId}, forceRefresh=${data.forceRefresh === true}`);
+                try {
+                    const summary = await this.runtime.queryFunctionSummary(
+                        String(data.nodeId || ''),
+                        data.forceRefresh === true
+                    );
+                    logger.info(`[AnalysisController] queryFunctionSummary result nodeId=${summary.nodeId}, status=${summary.cacheStatus}, stale=${summary.stale === true}`);
+                    this.provider.postMessage({
+                        command: 'functionSummaryData',
+                        ...summary
+                    });
+                } catch (error: any) {
+                    logger.info(`[AnalysisController] queryFunctionSummary failed nodeId=${data.nodeId}: ${error?.message || error}`);
+                    this.provider.postMessage({
+                        command: 'functionSummaryError',
+                        nodeId: data.nodeId,
+                        message: error?.message || String(error)
+                    });
+                }
+                break;
+            }
+
+            case 'getFunctionSummaryHistory': {
+                try {
+                    logger.info(`[AnalysisController] getFunctionSummaryHistory nodeId=${data.nodeId}, modelName=${data.modelName || '*'}`);
+                    const history = await this.runtime.getFunctionSummaryHistory(
+                        String(data.nodeId || ''),
+                        data.modelName ? String(data.modelName) : undefined
+                    );
+                    this.provider.postMessage({
+                        command: 'functionSummaryHistory',
+                        ...history
+                    });
+                } catch (error: any) {
+                    this.provider.postMessage({
+                        command: 'functionSummaryError',
+                        nodeId: data.nodeId,
+                        message: error?.message || String(error)
+                    });
+                }
+                break;
+            }
+
             default:
                 logger.info(`[AnalysisController] unknown webview command: ${data.command}`);
                 break;
@@ -194,10 +256,10 @@ export class AnalysisController {
             }
 
             this.provider.postMessage({
-                command: 'functionSummaryGenerated',
+                command: 'functionSummaryData',
                 ...summaryData
             });
-            vscode.window.showInformationMessage(`Generated summary: ${summaryData.label}`);
+            vscode.window.showInformationMessage(`Summary ready: ${summaryData.label}`);
         } catch (error: any) {
             const message = error?.message || String(error);
             this.provider.postMessage({
