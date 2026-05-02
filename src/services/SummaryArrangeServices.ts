@@ -42,7 +42,7 @@ export class EmptySummaryError extends Error {
     }
 }
 
-export class SummaryService {
+export class SummaryArrangeService {
     public static readonly FUNCTION_PROMPT_VERSION = 'function-summary:v1';
 
     public static async summarizeFunction(

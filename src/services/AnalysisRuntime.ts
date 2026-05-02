@@ -6,21 +6,15 @@ import { SynchronizationService } from './SynchronizationServices';
 import { GatingService } from './GatingServices';
 import { AnalysisIndexStatus, EdgeRelation, FunctionRef, FunctionSummaryData, GraphNodeRef, GraphViewData, NodeType, SourceLocationTarget } from '../models/GraphDefinition';
 import { SourceLocationService } from './SourceLocationServices';
-import { AnalysisIndexStatusService } from './AnalysisIndexStatusServices';
+import { AnalysisIndexStatusService } from './StatusServices';
 import { logger } from '../utils/logger';
-import { SummaryService } from './SummaryServices';
+import { SummaryArrangeService } from './SummaryArrangeServices';
 import { SummaryStorageService } from './SummaryStorageServices';
 import { SummaryCacheService } from './SummaryCacheServices';
 import { SummaryQueueService } from './SummaryQueueServices';
 import { LLMModelInfo, LLMModelService } from './LLMModelServices';
 import { SummaryContextService } from './SummaryContextServices';
-
-export interface AnalysisTask {
-    uri: vscode.Uri;
-    reason: string;
-    cascade: boolean;
-    generation: number;
-}
+import { AnalysisTask, GraphAnalysisQueueService } from './GraphQueueServices';
 
 export class AnalysisRuntime {
     private static instance: AnalysisRuntime;
@@ -37,16 +31,11 @@ export class AnalysisRuntime {
     private saveListener?: vscode.Disposable;
     private createListener?: vscode.Disposable;
 
-    // 分析调度队列
-    private taskQueue: AnalysisTask[] = [];
-    private uncommittedTasks: Map<string, AnalysisTask> = new Map();
-    private isProcessing: boolean = false;
-    private activeTask?: AnalysisTask;
     private pendingDeletions: Map<string, NodeJS.Timeout> = new Map();
     private analysisGeneration: number = 0;
-    private queueIdleResolvers: (() => void)[] = [];
 
     private readonly indexStatusService = new AnalysisIndexStatusService();
+    private readonly graphQueue: GraphAnalysisQueueService;
     private summaryStorageService?: SummaryStorageService;
     private summaryCacheService?: SummaryCacheService;
     private summaryQueueService?: SummaryQueueService;
@@ -55,6 +44,18 @@ export class AnalysisRuntime {
 
     private constructor() {
         this.projectGraph = new ProjectGraph();
+        this.graphQueue = new GraphAnalysisQueueService({
+            getGeneration: () => this.analysisGeneration,
+            processTask: task => this.processAnalysisTask(task),
+            onStatusChanged: () => this.emitIndexStatus(),
+            onIdle: async hasUncommittedTasks => {
+                if (hasUncommittedTasks && this.syncService) {
+                    await this.syncService.saveSnapshot(this.projectGraph);
+                    logger.info('[AnalysisRuntime] 调度队列全部处理完成，数据流更新并固化本地完毕！');
+                }
+            },
+            onDrained: () => this.emitIndexStatus({ suggestRequery: true })
+        });
     }
 
     public static getInstance(): AnalysisRuntime {
@@ -73,10 +74,11 @@ export class AnalysisRuntime {
     }
 
     private emitIndexStatus(overrides: Partial<AnalysisIndexStatus> = {}): void {
+        const queueStatus = this.graphQueue.getStatus();
         this.indexStatusService.updateQueueState({
-            isUpdating: this.isProcessing || this.taskQueue.length > 0 || !!this.activeTask,
-            queueLength: this.taskQueue.length + (this.activeTask ? 1 : 0),
-            activeTask: this.activeTask ? this.activeTask.uri.toString() : undefined,
+            isUpdating: queueStatus.isProcessing || queueStatus.queueLength > 0,
+            queueLength: queueStatus.queueLength,
+            activeTask: queueStatus.activeTask ? queueStatus.activeTask.uri.toString() : undefined,
             generation: this.analysisGeneration
         }, overrides);
     }
@@ -135,7 +137,7 @@ export class AnalysisRuntime {
             }
 
             // 为保证重命名状态尽快固化，在没有任务积压时执行一遍快照
-            if (this.taskQueue.length === 0 && !this.isProcessing && this.syncService) {
+            if (!this.graphQueue.hasPendingWork() && this.syncService) {
                 this.syncService.saveSnapshot(this.projectGraph);
             }
         });
@@ -212,20 +214,9 @@ export class AnalysisRuntime {
         }
 
         // 如果没有波及其他文件，队列为空，我们也必须在此当即固化一次快照，以确保图节点删除得到持久化
-        if (this.taskQueue.length === 0 && !this.isProcessing && this.syncService) {
+        if (!this.graphQueue.hasPendingWork() && this.syncService) {
             await this.syncService.saveSnapshot(this.projectGraph);
         }
-    }
-
-    /**
-     * 获取支持JSON序列化的任务队列结构
-     */
-    private getSerializableTasks(): { uri: string, reason: string, cascade: boolean }[] {
-        return this.taskQueue.map(t => ({
-            uri: t.uri.toString(),
-            reason: t.reason,
-            cascade: t.cascade
-        }));
     }
 
     /**
@@ -307,13 +298,13 @@ export class AnalysisRuntime {
             }
 
             // 若队列中没有任务，直接保存快照；否则通过队列后续保存
-            if (this.taskQueue.length === 0 && !this.isProcessing) {
+            if (!this.graphQueue.hasPendingWork()) {
                 await this.syncService.saveSnapshot(this.projectGraph);
                 logger.info('[AnalysisRuntime] 增量同步完成！无新增更新项。');
             }
         } finally {
             this.markSnapshotReady();
-            await this.waitForQueueIdle(syncGeneration);
+            await this.graphQueue.waitForIdle(syncGeneration);
             this.emitIndexStatus({ suggestRequery: true });
             logger.info('[AnalysisRuntime] 初始启动数据载入和分析队列处理完成。');
         }
@@ -333,104 +324,29 @@ export class AnalysisRuntime {
             //TODO: 无修改入队会发生什么？是否只有创建会触发这个分支？
         }
 
-        const existingIndex = this.taskQueue.findIndex(t => t.uri.toString() === uriStr);
-
-        if (existingIndex >= 0) {
-            // 如果已在队列中，提权其级联属性。发生于波及文件被修改时
-            if (cascade && !this.taskQueue[existingIndex].cascade) {
-                this.taskQueue[existingIndex].cascade = true;
-                this.taskQueue[existingIndex].reason = reason;
-            }
-        } else {
-            this.taskQueue.push({ uri, reason, cascade, generation });
-        }
-
-        this.emitIndexStatus();
-
-        // 尝试启动异步消费
-        this._processTaskQueue().catch(err => {
-            logger.info(`[AnalysisRuntime] 队列处理异常: ${err.message}`);
-        });
+        this.graphQueue.enqueue(uri, reason, cascade, generation);
     }
 
     /**
-     * 消费队列的任务循环
+     * 执行单个队列任务中仍属于运行时编排的语言服务等待、文件解析与索引提交。
      */
-    private async _processTaskQueue(): Promise<void> {
-        if (this.isProcessing) {
-            return;
+    private async processAnalysisTask(task: AnalysisTask): Promise<string[] | undefined> {
+        const isReady = await GatingService.waitAndCheckLSPForFile(task.uri);
+        if (!isReady) {
+            logger.info(`[AnalysisRuntime] 无法挂载语言服务或文件被阻止，跳过此文件: ${task.uri.fsPath}`);
+            return undefined;
         }
-        this.isProcessing = true;
-        this.emitIndexStatus();
 
-        try {
-            while (this.taskQueue.length > 0) {
-                this.activeTask = this.taskQueue.shift()!;
-                this.emitIndexStatus();
-                const task = this.activeTask;
-                if (task.generation !== this.analysisGeneration) {
-                    logger.info(`[AnalysisRuntime] 跳过旧世代分析任务: ${task.uri.fsPath}`);
-                    this.activeTask = undefined;
-                    continue;
-                }
-                // 记录到未提交集合，供突发退出时追回
-                this.uncommittedTasks.set(task.uri.toString(), task);
-                logger.info(`[AnalysisRuntime] 分析队列执行文件: ${task.uri.fsPath} (原因: ${task.reason})`);
-
-                try {
-                    const isReady = await GatingService.waitAndCheckLSPForFile(task.uri);
-                    if (!isReady) {
-                        logger.info(`[AnalysisRuntime] 无法挂载语言服务或文件被阻止，跳过此文件: ${task.uri.fsPath}`);
-                        this.activeTask = undefined;
-                        continue;
-                    }
-
-                    const affectedUris = await this.doAnalyzeFile(task.uri, task.generation);
-                    if (!affectedUris) {
-                        this.uncommittedTasks.delete(task.uri.toString());
-                        this.activeTask = undefined;
-                        continue;
-                    }
-
-                    if (this.syncService) {
-                        await this.syncService.commitFileToIndex(task.uri);
-                    }
-
-                    // 5. 如果开启了级联发现相关被波及文件，需要入队重新扫描它，但它的结果不再级联
-                    if (task.cascade && affectedUris && affectedUris.length > 0) {
-                        for (const affectedUriStr of affectedUris) {
-                            const affectedUri = vscode.Uri.parse(affectedUriStr);
-                            this.enqueueTask(affectedUri, `依赖的源文件 ${task.uri.fsPath} 结构变更的级联更新`, false, task.generation);
-                        }
-                    }
-                } catch (err: any) {
-                    logger.info(`[AnalysisRuntime] 忽略解析失败的文件 ${task.uri.fsPath}: ${err.message}`);
-                }
-
-                this.activeTask = undefined;
-            }
-
-            // 队列全部消费完毕后，固化保存最新的全图一次
-            if (this.syncService && this.uncommittedTasks.size > 0) {
-                await this.syncService.saveSnapshot(this.projectGraph);
-                this.uncommittedTasks.clear(); // 保存成功后清空未提交记录
-                logger.info('[AnalysisRuntime] 调度队列全部处理完成，数据流更新并固化本地完毕！');
-            }
-        } finally {
-            this.isProcessing = false;
-            this.activeTask = undefined;
-
-            // 防御性检查：如果在固化快照（await）等异步操作期间又有新任务入队，则重新启动处理
-            if (this.taskQueue.length > 0) {
-                this.emitIndexStatus();
-                this._processTaskQueue().catch(err => {
-                    logger.info(`[AnalysisRuntime] 追加队列处理异常: ${err.message}`);
-                });
-            } else {
-                this.resolveQueueIdleWaiters();
-                this.emitIndexStatus({ suggestRequery: true });
-            }
+        const affectedUris = await this.doAnalyzeFile(task.uri, task.generation);
+        if (!affectedUris) {
+            return undefined;
         }
+
+        if (this.syncService) {
+            await this.syncService.commitFileToIndex(task.uri);
+        }
+
+        return affectedUris;
     }
 
     /**
@@ -554,20 +470,20 @@ export class AnalysisRuntime {
     }
 
     public async queryFunctionSummary(nodeId: string, forceRefresh: boolean = false, allowGenerate: boolean = true, reason: string = 'unknown'): Promise<FunctionSummaryData> {
-        logger.info(`[SummaryBackend] backend-cache-query received nodeId=${nodeId}, forceRefresh=${forceRefresh}, allowGenerate=${allowGenerate}, reason=${reason}`);
+        // logger.info(`[SummaryBackend] backend-cache-query received nodeId=${nodeId}, forceRefresh=${forceRefresh}, allowGenerate=${allowGenerate}, reason=${reason}`);
         await this.indexStatusService.waitForSnapshotReady();
-        logger.info(`[SummaryBackend] backend-cache-query snapshot-ready nodeId=${nodeId}, reason=${reason}`);
+        // logger.info(`[SummaryBackend] backend-cache-query snapshot-ready nodeId=${nodeId}, reason=${reason}`);
         await this.ensureLLMSupportReady();
-        logger.info(`[SummaryBackend] backend-cache-query llm-support-ready nodeId=${nodeId}, reason=${reason}`);
+        // logger.info(`[SummaryBackend] backend-cache-query llm-support-ready nodeId=${nodeId}, reason=${reason}`);
 
-        const result = await SummaryService.summarizeFunction(this.projectGraph, nodeId, undefined, {
+        const result = await SummaryArrangeService.summarizeFunction(this.projectGraph, nodeId, undefined, {
             cacheService: this.summaryCacheService,
             queueService: this.summaryQueueService,
             modelService: this.llmModelService,
             forceRefresh,
             allowGenerate
         });
-        logger.info(`[SummaryBackend] backend-cache-hit completed nodeId=${nodeId}, status=${result.cacheStatus}, stale=${result.stale === true}, model=${result.modelName || result.modelId || '<unknown>'}, reason=${reason}, summaryType=${typeof result.summary}, summaryLength=${String(result.summary || '').length}`);
+        // logger.info(`[SummaryBackend] backend-cache-hit completed nodeId=${nodeId}, status=${result.cacheStatus}, stale=${result.stale === true}, model=${result.modelName || result.modelId || '<unknown>'}, reason=${reason}, summaryType=${typeof result.summary}, summaryLength=${String(result.summary || '').length}`);
         return result;
     }
 
@@ -582,7 +498,7 @@ export class AnalysisRuntime {
         return this.summaryCacheService.getFunctionSummaryHistory({
             nodeId,
             modelName,
-            promptVersion: SummaryService.FUNCTION_PROMPT_VERSION,
+            promptVersion: SummaryArrangeService.FUNCTION_PROMPT_VERSION,
             currentBodyHash: context.bodyHash
         });
     }
@@ -644,8 +560,7 @@ export class AnalysisRuntime {
         }
 
         // 3. 清空任务队列，取消待处理删除
-        this.taskQueue = [];
-        this.uncommittedTasks.clear();
+        this.graphQueue.clear();
         for (const timer of this.pendingDeletions.values()) {
             clearTimeout(timer);
         }
@@ -659,41 +574,6 @@ export class AnalysisRuntime {
         logger.info('[AnalysisRuntime] 开始重新扫描工作区...');
         await this.runIncrementalSync();
         logger.info('[AnalysisRuntime] 图重建完成！');
-    }
-
-    private isQueueIdleForGeneration(generation: number): boolean {
-        if (this.isProcessing) {
-            return false;
-        }
-
-        if (this.activeTask && this.activeTask.generation === generation) {
-            return false;
-        }
-
-        return !this.taskQueue.some(task => task.generation === generation);
-    }
-
-    private waitForQueueIdle(generation: number): Promise<void> {
-        if (this.isQueueIdleForGeneration(generation)) {
-            return Promise.resolve();
-        }
-
-        return new Promise(resolve => {
-            this.queueIdleResolvers.push(() => {
-                if (this.isQueueIdleForGeneration(generation)) {
-                    resolve();
-                } else {
-                    this.waitForQueueIdle(generation).then(resolve);
-                }
-            });
-        });
-    }
-
-    private resolveQueueIdleWaiters(): void {
-        const resolvers = this.queueIdleResolvers.splice(0);
-        for (const resolve of resolvers) {
-            resolve();
-        }
     }
 
     private resetSnapshotReadyPromise(): void {
@@ -736,36 +616,9 @@ export class AnalysisRuntime {
      */
     public dispose(): void {
         // 插件退出前立刻同步保存未完成及未固化的任务
-        const leftoverTasksMap = new Map<string, AnalysisTask>();
-        // 1. 先载入所有已处理但未固化到快照的任务
-        for (const task of this.uncommittedTasks.values()) {
-            leftoverTasksMap.set(task.uri.toString(), task);
-        }
-        // 2. 叠加上尚未处理的队列任务，若同名且新任务级联级别更高则提权
-        for (const task of this.taskQueue) {
-            const existing = leftoverTasksMap.get(task.uri.toString());
-            if (existing && task.cascade) {
-                existing.cascade = true;
-            } else if (!existing) {
-                leftoverTasksMap.set(task.uri.toString(), task);
-            }
-        }
-        // 3. 加上当前刚好正在被执行的任务
-        if (this.activeTask) {
-            const key = this.activeTask.uri.toString();
-            if (!leftoverTasksMap.has(key)) {
-                leftoverTasksMap.set(key, this.activeTask);
-            }
-        }
-
-        const leftoverTasks = Array.from(leftoverTasksMap.values());
+        const leftoverTasks = this.graphQueue.getSerializableTasks();
         if (leftoverTasks.length > 0 && this.syncService) {
-            const pendingData = leftoverTasks.map(t => ({
-                uriStr: t.uri.toString(),
-                reason: t.reason,
-                cascade: t.cascade
-            }));
-            this.syncService.savePendingTasksSync(pendingData);
+            this.syncService.savePendingTasksSync(leftoverTasks);
         }
 
         if (this.configChangeListener) {

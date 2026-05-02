@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { AnalysisViewProvider } from '../providers/AnalysisView';
 import { AnalysisRuntime } from '../services/AnalysisRuntime';
-import { SummaryCacheMissError } from '../services/SummaryServices';
+import { SummaryCacheMissError } from '../services/SummaryArrangeServices';
 import { logger } from '../utils/logger';
 
 export class AnalysisController {
