@@ -61,8 +61,15 @@
     let suppressRelationGraphContextUntil = 0;
     let llmModels = [];
     let selectedLLMModelName = '';
-    const SUMMARY_LONG_PRESS_MS = 650;
+    let summaryLongPressMs = 650;
+    let summaryHoverDelayMs = 1000;
     let summaryHoldState = null;
+    let summaryHoverState = null;
+    const summaryRequestAnchors = new Map();
+    let dismissedSummaryNodeId = null;
+    let suppressNextNodeTapUntil = 0;
+    let suppressNextNodeTapId = null;
+    const LONG_PRESS_TAP_SUPPRESSION_MS = 1600;
 
     if (graphIncrementalModule && typeof graphIncrementalModule.createEmptyGraphSnapshot === 'function') {
         latestGraphSnapshot = graphIncrementalModule.createEmptyGraphSnapshot();
@@ -147,10 +154,19 @@
                 summaryStore: summaryStoreModule,
                 onRefresh: (record) => {
                     if (record && record.nodeId) {
+                        summaryRequestAnchors.set(record.nodeId, getSummaryNodePopoverPoint(record.nodeId) || getSummaryNodeAnchorPoint(record.nodeId) || { x: 88, y: 88 });
+                        log('summary', 'info', '[SummaryUI] manual-refresh', {
+                            nodeId: record.nodeId,
+                            reason: 'manual-refresh',
+                            forceRefresh: true,
+                            allowGenerate: true
+                        });
                         vscode.postMessage({
                             command: 'queryFunctionSummary',
                             nodeId: record.nodeId,
-                            forceRefresh: true
+                            forceRefresh: true,
+                            allowGenerate: true,
+                            reason: 'manual-refresh'
                         });
                     }
                 }
@@ -167,33 +183,116 @@
 
         const record = summaryStoreModule.get(nodeId);
         if (!record) {
-            log('summary', 'verbose', 'summary hover miss', {
+            log('summary', 'verbose', '[SummaryUI] hover-cache-miss', {
                 source: source || 'unknown',
-                nodeId
+                nodeId,
+                reason: source || 'unknown'
             });
             return false;
         }
+
+        log('summary', 'verbose', '[SummaryUI] hover-cache-hit', {
+            source: source || 'unknown',
+            nodeId,
+            reason: source || 'unknown',
+            stale: record.stale === true,
+            cacheStatus: record.cacheStatus || null
+        });
 
         const popover = ensureSummaryPopover();
         if (!popover || typeof popover.show !== 'function') {
-            log('summary', 'error', 'summary popover unavailable', {
+            log('summary', 'error', '[SummaryUI] popover-hidden-or-empty', {
                 source: source || 'unknown',
                 nodeId
             });
             return false;
         }
 
-        popover.show(record, point || { x: 80, y: 80 });
-        log('state', 'verbose', 'summary hover shown', {
+        const shown = popover.show(record, point || { x: 80, y: 80 });
+        log('state', shown ? 'verbose' : 'error', shown ? '[SummaryUI] popover-show' : '[SummaryUI] popover-hidden-or-empty', {
             source: source || 'unknown',
-            nodeId
+            nodeId,
+            reason: source || 'unknown'
         });
-        return true;
+        return shown;
+    }
+
+    function cancelSummaryHover(reason) {
+        if (summaryHoverState && summaryHoverState.timer) {
+            clearTimeout(summaryHoverState.timer);
+        }
+        if (summaryHoverState) {
+            log('summary', 'verbose', 'summary hover canceled', {
+                reason,
+                nodeId: summaryHoverState.nodeId
+            });
+        }
+        summaryHoverState = null;
+    }
+
+    function scheduleSummaryHover(nodeId, point, source) {
+        if (!nodeId || dismissedSummaryNodeId === nodeId) {
+            return;
+        }
+        if (summaryHoldState) {
+            log('summary', 'verbose', '[SummaryUI] hover-skipped-during-long-press', { nodeId });
+            return;
+        }
+
+        cancelSummaryHover('new-hover');
+        log('summary', 'verbose', '[SummaryUI] hover-scheduled', {
+            nodeId,
+            reason: source || 'unknown',
+            delayMs: summaryHoverDelayMs
+        });
+        summaryHoverState = {
+            nodeId,
+            point: point || { x: 80, y: 80 },
+            source: source || 'unknown',
+            timer: setTimeout(function () {
+                const pending = summaryHoverState;
+                summaryHoverState = null;
+                if (!pending || dismissedSummaryNodeId === pending.nodeId) {
+                    return;
+                }
+                if (!showSummaryForNodeId(pending.nodeId, pending.point, pending.source)) {
+                    summaryRequestAnchors.set(pending.nodeId, pending.point || getSummaryNodeAnchorPoint(pending.nodeId) || { x: 88, y: 88 });
+                    log('summary', 'info', '[SummaryUI] backend-cache-query', {
+                        nodeId: pending.nodeId,
+                        reason: 'hover',
+                        forceRefresh: false,
+                        allowGenerate: false
+                    });
+                    vscode.postMessage({
+                        command: 'queryFunctionSummary',
+                        nodeId: pending.nodeId,
+                        forceRefresh: false,
+                        allowGenerate: false,
+                        reason: 'hover'
+                    });
+                }
+            }, Math.max(0, Number(summaryHoverDelayMs || 0)))
+        };
     }
 
     function hideSummaryPopover(delayMs = 80) {
         if (summaryPopover && typeof summaryPopover.hide === 'function') {
             summaryPopover.hide(delayMs);
+        }
+    }
+
+    function hideSummaryPopoverNow(reason) {
+        cancelSummaryHover(reason || 'hide-now');
+        if (summaryPopover && typeof summaryPopover.getCurrentRecord === 'function') {
+            const record = summaryPopover.getCurrentRecord();
+            if (record && record.nodeId) {
+                dismissedSummaryNodeId = record.nodeId;
+            }
+        }
+        if (summaryPopover && typeof summaryPopover.hideNow === 'function') {
+            summaryPopover.hideNow();
+        } else {
+            hideSummaryPopover(0);
         }
     }
 
@@ -241,6 +340,25 @@
         }).join('');
     }
 
+    function positionLLMModelMenu() {
+        const trigger = document.getElementById('llm-model-trigger');
+        const menu = document.getElementById('llm-model-menu');
+        if (!trigger || !menu || menu.hidden) {
+            return;
+        }
+
+        if (menu.parentElement !== document.body) {
+            document.body.appendChild(menu);
+        }
+
+        const rect = trigger.getBoundingClientRect();
+        const margin = 8;
+        const width = menu.offsetWidth || 240;
+        const left = Math.min(window.innerWidth - width - margin, Math.max(margin, rect.left));
+        menu.style.left = Math.round(left) + 'px';
+        menu.style.top = Math.round(rect.bottom + margin) + 'px';
+    }
+
     function toggleLLMModelMenu(forceOpen) {
         const trigger = document.getElementById('llm-model-trigger');
         const menu = document.getElementById('llm-model-menu');
@@ -252,6 +370,7 @@
         trigger.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
         if (shouldOpen) {
             renderLLMModelMenu();
+            positionLLMModelMenu();
         }
     }
 
@@ -280,8 +399,289 @@
         return kind === 'function' || kind === 'method';
     }
 
+    function ensureSummaryHoldOverlay() {
+        let overlay = document.getElementById('summary-hold-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'summary-hold-overlay';
+            overlay.className = 'summary-hold-overlay';
+            overlay.hidden = true;
+            overlay.innerHTML = [
+                '<svg class="summary-hold-svg" viewBox="0 0 100 100" aria-hidden="true">',
+                '<circle class="summary-hold-track" cx="50" cy="50" r="44"></circle>',
+                '<circle class="summary-hold-progress" cx="50" cy="50" r="44"></circle>',
+                '</svg>'
+            ].join('');
+            document.body.appendChild(overlay);
+        }
+        return overlay;
+    }
+
+    function positionSummaryHoldOverlay(node) {
+        const overlay = ensureSummaryHoldOverlay();
+        const containerRect = cy?.container()?.getBoundingClientRect?.();
+        const box = node && typeof node.renderedBoundingBox === 'function'
+            ? node.renderedBoundingBox({ includeLabels: false, includeOverlays: false })
+            : null;
+        if (!containerRect || !box) {
+            return;
+        }
+
+        const diameter = Math.max(box.w || 0, box.h || 0) + 18;
+        overlay.style.width = Math.round(diameter) + 'px';
+        overlay.style.height = Math.round(diameter) + 'px';
+        overlay.style.left = Math.round(containerRect.left + (box.x1 || 0) + ((box.w || 0) - diameter) / 2) + 'px';
+        overlay.style.top = Math.round(containerRect.top + (box.y1 || 0) + ((box.h || 0) - diameter) / 2) + 'px';
+    }
+
+    function startSummaryHoldOverlay(node) {
+        const overlay = ensureSummaryHoldOverlay();
+        positionSummaryHoldOverlay(node);
+        overlay.hidden = false;
+        overlay.style.setProperty('--summary-hold-ms', Math.max(1, Number(summaryLongPressMs || 650)) + 'ms');
+        overlay.classList.remove('is-running');
+        // Force animation restart after repeated long presses on the same node.
+        void overlay.offsetWidth;
+        overlay.classList.add('is-running');
+    }
+
+    function stopSummaryHoldOverlay() {
+        const overlay = document.getElementById('summary-hold-overlay');
+        if (!overlay) {
+            return;
+        }
+        overlay.classList.remove('is-running');
+        overlay.hidden = true;
+    }
+
+    function pulseSummaryOverlay(node) {
+        const containerRect = cy?.container()?.getBoundingClientRect?.();
+        const box = node && typeof node.renderedBoundingBox === 'function'
+            ? node.renderedBoundingBox({ includeLabels: false, includeOverlays: false })
+            : null;
+        if (!containerRect || !box) {
+            return false;
+        }
+
+        let overlay = document.getElementById('summary-pulse-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'summary-pulse-overlay';
+            overlay.className = 'summary-pulse-overlay';
+            overlay.hidden = true;
+            document.body.appendChild(overlay);
+        }
+
+        const diameter = Math.max(box.w || 0, box.h || 0) + 18;
+        overlay.style.width = Math.round(diameter) + 'px';
+        overlay.style.height = Math.round(diameter) + 'px';
+        overlay.style.left = Math.round(containerRect.left + (box.x1 || 0) + ((box.w || 0) - diameter) / 2) + 'px';
+        overlay.style.top = Math.round(containerRect.top + (box.y1 || 0) + ((box.h || 0) - diameter) / 2) + 'px';
+        overlay.hidden = false;
+        overlay.classList.remove('is-running');
+        void overlay.offsetWidth;
+        overlay.classList.add('is-running');
+        setTimeout(function () {
+            overlay.classList.remove('is-running');
+            overlay.hidden = true;
+        }, 620);
+        return true;
+    }
+
+    function getSummaryNodeAnchorPoint(nodeId) {
+        const anchor = getSummaryNodePopoverPoint(nodeId);
+        return anchor ? { x: anchor.x, y: anchor.y } : null;
+    }
+
+    function getSummaryNodePopoverPoint(nodeId) {
+        if (!cy || !nodeId) {
+            return null;
+        }
+
+        const node = cy.getElementById(nodeId);
+        if (!node || (typeof node.empty === 'function' && node.empty())) {
+            return null;
+        }
+
+        const containerRect = cy.container()?.getBoundingClientRect?.();
+        const box = typeof node.renderedBoundingBox === 'function'
+            ? node.renderedBoundingBox({ includeLabels: false, includeOverlays: false })
+            : null;
+        if (!containerRect || !box) {
+            return null;
+        }
+
+        const viewportMargin = 12;
+        const nodeGap = 28;
+        const popoverWidth = Math.min(360, Math.max(260, window.innerWidth - 24));
+        const popoverHeight = Math.min(280, Math.max(180, window.innerHeight * 0.42));
+        const nodeLeft = containerRect.left + (box.x1 || 0);
+        const nodeRight = containerRect.left + (box.x2 || 0);
+        const nodeTop = containerRect.top + (box.y1 || 0);
+        const nodeBottom = containerRect.top + (box.y2 || 0);
+        const nodeCenterX = nodeLeft + ((box.w || 0) / 2);
+        const nodeCenterY = nodeTop + ((box.h || 0) / 2);
+
+        function clamp(value, min, max) {
+            return Math.min(max, Math.max(min, value));
+        }
+
+        function candidate(side, x, y, priority) {
+            const left = clamp(x, viewportMargin, Math.max(viewportMargin, window.innerWidth - popoverWidth - viewportMargin));
+            const top = clamp(y, viewportMargin, Math.max(viewportMargin, window.innerHeight - popoverHeight - viewportMargin));
+            const separated = side === 'right'
+                ? left >= nodeRight + nodeGap * 0.5
+                : side === 'left'
+                    ? left + popoverWidth <= nodeLeft - nodeGap * 0.5
+                    : side === 'down'
+                        ? top >= nodeBottom + nodeGap * 0.5
+                        : top + popoverHeight <= nodeTop - nodeGap * 0.5;
+            const overflow = Math.max(0, viewportMargin - left)
+                + Math.max(0, viewportMargin - top)
+                + Math.max(0, left + popoverWidth + viewportMargin - window.innerWidth)
+                + Math.max(0, top + popoverHeight + viewportMargin - window.innerHeight);
+            return { side, x: Math.round(left), y: Math.round(top), separated, overflow, priority };
+        }
+
+        const candidates = [
+            candidate('right', nodeRight + nodeGap, nodeCenterY - popoverHeight / 2, 0),
+            candidate('left', nodeLeft - nodeGap - popoverWidth, nodeCenterY - popoverHeight / 2, 1),
+            candidate('down', nodeCenterX - popoverWidth / 2, nodeBottom + nodeGap, 2),
+            candidate('up', nodeCenterX - popoverWidth / 2, nodeTop - nodeGap - popoverHeight, 3)
+        ].sort(function (left, right) {
+            if (left.separated !== right.separated) {
+                return left.separated ? -1 : 1;
+            }
+            if (left.overflow !== right.overflow) {
+                return left.overflow - right.overflow;
+            }
+            return left.priority - right.priority;
+        });
+
+        const chosen = candidates[0];
+        log('summary', 'info', '[SummaryUI] popover-node-side-anchor', {
+            nodeId,
+            anchorSide: chosen.side,
+            x: chosen.x,
+            y: chosen.y,
+            separated: chosen.separated
+        });
+        return chosen;
+    }
+
+    function pulseSummaryNode(node) {
+        if (!node || typeof node.addClass !== 'function') {
+            log('summary', 'error', '[SummaryUI] pulse-skipped-invalid-node', {
+                hasNode: !!node,
+                hasAddClass: !!(node && typeof node.addClass === 'function')
+            });
+            return;
+        }
+        const nodeId = typeof node.id === 'function' ? node.id() : null;
+        log('summary', 'info', '[SummaryUI] pulse-start', {
+            nodeId,
+            hasAnimation: typeof node.animation === 'function',
+            hasNumericStyle: typeof node.numericStyle === 'function',
+            isCenterClassCard: !!(node.hasClass && node.hasClass('center-class-card')),
+            width: typeof node.width === 'function' ? node.width() : null,
+            height: typeof node.height === 'function' ? node.height() : null
+        });
+        node.addClass('summary-triggered-pulse');
+        const usedOverlay = pulseSummaryOverlay(node);
+        log('summary', 'info', '[SummaryUI] pulse-overlay-state', {
+            nodeId,
+            usedOverlay
+        });
+        if (node.hasClass && node.hasClass('center-class-card')) {
+            setTimeout(function () {
+                if (node && typeof node.removeClass === 'function') {
+                    node.removeClass('summary-triggered-pulse');
+                }
+                log('summary', 'info', '[SummaryUI] pulse-done', { nodeId, mode: 'overlay-only' });
+            }, 620);
+            return;
+        }
+        const baseWidth = Number(typeof node.width === 'function' ? node.width() : 0) || 56;
+        const baseHeight = Number(typeof node.height === 'function' ? node.height() : 0) || baseWidth;
+        const baseFontSize = Number(typeof node.numericStyle === 'function' ? node.numericStyle('font-size') : 0) || 11;
+        const enlargedWidth = Math.min(140, baseWidth * 1.22);
+        const enlargedHeight = Math.min(140, baseHeight * 1.22);
+        const enlargedFontSize = Math.min(18, baseFontSize * 1.12);
+
+        try {
+            if (typeof node.animation !== 'function') {
+                throw new Error('node.animation is not available');
+            }
+            const grow = node.animation({
+                style: {
+                    width: enlargedWidth,
+                    height: enlargedHeight,
+                    'font-size': enlargedFontSize
+                },
+                duration: 140,
+                easing: 'ease-out-cubic'
+            });
+            const shrink = node.animation({
+                style: {
+                    width: baseWidth,
+                    height: baseHeight,
+                    'font-size': baseFontSize
+                },
+                duration: 420,
+                easing: 'ease-out-cubic'
+            });
+            grow.play().promise('completed')
+                .then(function () {
+                    log('summary', 'info', '[SummaryUI] pulse-grow-completed', { nodeId });
+                    return shrink.play().promise('completed');
+                })
+                .finally(function () {
+                    if (node && typeof node.removeClass === 'function') {
+                        node.removeClass('summary-triggered-pulse');
+                    }
+                    if (node && typeof node.removeStyle === 'function') {
+                        node.removeStyle('width height font-size');
+                    }
+                    log('summary', 'info', '[SummaryUI] pulse-done', { nodeId, mode: usedOverlay ? 'cytoscape+overlay' : 'cytoscape' });
+                });
+            setTimeout(function () {
+                if (node && node.hasClass && node.hasClass('summary-triggered-pulse')) {
+                    log('summary', 'error', '[SummaryUI] pulse-watchdog-timeout', {
+                        nodeId,
+                        hasClass: true,
+                        mode: usedOverlay ? 'cytoscape+overlay' : 'cytoscape'
+                    });
+                }
+            }, 900);
+        } catch (error) {
+            log('summary', 'error', '[SummaryUI] pulse-cytoscape-error', {
+                nodeId,
+                message: error && error.message ? error.message : String(error)
+            });
+            setTimeout(function () {
+                if (node && typeof node.removeClass === 'function') {
+                    node.removeClass('summary-triggered-pulse');
+                }
+                log('summary', 'info', '[SummaryUI] pulse-done', { nodeId, mode: usedOverlay ? 'overlay-fallback' : 'class-fallback' });
+            }, 560);
+        }
+    }
+
     function cancelSummaryHold(reason) {
         if (!summaryHoldState) {
+            return;
+        }
+        if (summaryHoldState.triggered) {
+            stopSummaryHoldOverlay();
+            if (summaryHoldState.node && typeof summaryHoldState.node.removeClass === 'function') {
+                summaryHoldState.node.removeClass('summary-hold-pending');
+            }
+            log('summary', 'verbose', '[SummaryUI] long-press-release-after-trigger', {
+                reason,
+                nodeId: summaryHoldState.nodeId,
+                holdDurationMs: Date.now() - summaryHoldState.startedAt
+            });
+            summaryHoldState = null;
             return;
         }
         if (summaryHoldState.timer) {
@@ -290,11 +690,23 @@
         if (summaryHoldState.node && typeof summaryHoldState.node.removeClass === 'function') {
             summaryHoldState.node.removeClass('summary-hold-pending');
         }
-        log('summary', 'verbose', 'summary hold canceled', {
+        stopSummaryHoldOverlay();
+        log('summary', 'verbose', '[SummaryUI] long-press-canceled', {
             reason,
-            nodeId: summaryHoldState.nodeId
+            nodeId: summaryHoldState.nodeId,
+            holdDurationMs: Date.now() - summaryHoldState.startedAt
         });
         summaryHoldState = null;
+    }
+
+    function setLongPressTapSuppression(nodeId, reason) {
+        suppressNextNodeTapUntil = Date.now() + LONG_PRESS_TAP_SUPPRESSION_MS;
+        suppressNextNodeTapId = nodeId;
+        log('summary', 'info', '[SummaryUI] tap-suppression-set', {
+            nodeId,
+            reason,
+            suppressionUntil: suppressNextNodeTapUntil
+        });
     }
 
     function startSummaryHold(event) {
@@ -303,38 +715,105 @@
             return;
         }
 
+        cancelSummaryHover('summary-hold-start');
+        hideSummaryPopover(0);
         cancelSummaryHold('new-hold');
         const nodeId = node.id();
         const kind = getNodeKind(node);
         const point = pointFromCyEvent(event);
+        const originalEvent = event?.originalEvent || {};
         node.addClass('summary-hold-pending');
+        startSummaryHoldOverlay(node);
+        log('summary', 'info', '[SummaryUI] long-press-start', {
+            nodeId,
+            kind,
+            reason: 'long-press',
+            forceRefresh: true,
+            allowGenerate: true
+        });
         summaryHoldState = {
             node,
             nodeId,
             kind,
+            point,
+            startedAt: Date.now(),
+            startX: Number.isFinite(originalEvent.clientX) ? originalEvent.clientX : point.x,
+            startY: Number.isFinite(originalEvent.clientY) ? originalEvent.clientY : point.y,
+            triggered: false,
+            released: false,
             timer: setTimeout(function () {
                 const current = summaryHoldState;
-                summaryHoldState = null;
+                if (!current || current.nodeId !== nodeId) {
+                    return;
+                }
+                current.triggered = true;
+                current.timer = null;
                 node.removeClass('summary-hold-pending');
+                stopSummaryHoldOverlay();
+                setLongPressTapSuppression(nodeId, 'long-press-threshold');
+                log('summary', 'info', '[SummaryUI] long-press-threshold-reached', {
+                    nodeId,
+                    kind,
+                    holdDurationMs: Date.now() - current.startedAt,
+                    suppressionUntil: suppressNextNodeTapUntil
+                });
+                pulseSummaryNode(node);
                 if (kind === 'class' || kind === 'interface') {
-                    log('summary', 'info', 'class summary is reserved for a later phase', { nodeId, kind });
+                    log('summary', 'info', '[SummaryUI] long-press-triggered class-summary-reserved', { nodeId, kind, reason: 'long-press' });
                     return;
                 }
                 if (!isFunctionSummaryTarget(node)) {
                     return;
                 }
+                summaryRequestAnchors.set(nodeId, getSummaryNodePopoverPoint(nodeId) || getSummaryNodeAnchorPoint(nodeId) || point);
+                log('summary', 'info', '[SummaryUI] long-press-triggered', {
+                    nodeId,
+                    reason: 'long-press',
+                    forceRefresh: true,
+                    allowGenerate: true
+                });
                 vscode.postMessage({
                     command: 'queryFunctionSummary',
                     nodeId,
-                    forceRefresh: false
+                    forceRefresh: true,
+                    allowGenerate: true,
+                    reason: 'long-press'
                 });
                 log('summary', 'info', 'function summary requested by long press', {
                     nodeId,
                     point,
                     requestState: !!current
                 });
-            }, SUMMARY_LONG_PRESS_MS)
+            }, Math.max(1, Number(summaryLongPressMs || 650)))
         };
+    }
+
+    function maybeCancelSummaryHoldByMovement(event) {
+        if (!summaryHoldState) {
+            return;
+        }
+        const originalEvent = event?.originalEvent || {};
+        if (!Number.isFinite(originalEvent.clientX) || !Number.isFinite(originalEvent.clientY)) {
+            return;
+        }
+        const dx = originalEvent.clientX - summaryHoldState.startX;
+        const dy = originalEvent.clientY - summaryHoldState.startY;
+        if (Math.sqrt(dx * dx + dy * dy) > 8) {
+            cancelSummaryHold('pointer-move-threshold');
+        }
+    }
+
+    function shouldSuppressNodeTap(nodeId) {
+        if (!nodeId || Date.now() > suppressNextNodeTapUntil || suppressNextNodeTapId !== nodeId) {
+            return false;
+        }
+        log('summary', 'info', '[SummaryUI] tap-suppression-consumed', {
+            nodeId,
+            suppressionUntil: suppressNextNodeTapUntil
+        });
+        suppressNextNodeTapUntil = 0;
+        suppressNextNodeTapId = null;
+        return true;
     }
 
     function createCyInstance() {
@@ -1493,6 +1972,7 @@
             getQueryDebounceWindowMs,
             getQueryDuplicateWindowMs,
             shouldSuppressContextTap: shouldSuppressRelationGraphContextTap,
+            shouldSuppressNodeTap,
             captureGraphView: captureCurrentGraphView,
             restoreGraphView: restoreGraphView,
             animateCenterNodeViewport,
@@ -1530,7 +2010,8 @@
             showEmptyGraphView: showEmptyGraphView,
             isActiveTab: () => tabManagerModule
                 && typeof tabManagerModule.getActiveTabId === 'function'
-                && tabManagerModule.getActiveTabId() === 'callGraph'
+                && tabManagerModule.getActiveTabId() === 'callGraph',
+            shouldSuppressNodeTap
         });
 
         if (typeof callGraphTab.bindToolbar === 'function') {
@@ -1561,6 +2042,7 @@
         }
     });
     document.getElementById('llm-model-menu')?.addEventListener('click', function (event) {
+        event.stopPropagation();
         const button = event.target && typeof event.target.closest === 'function'
             ? event.target.closest('[data-model-name]')
             : null;
@@ -1568,7 +2050,6 @@
             return;
         }
         event.preventDefault();
-        event.stopPropagation();
         vscode.postMessage({
             command: 'setLLMModel',
             modelName: button.dataset.modelName
@@ -1582,7 +2063,11 @@
         }
         toggleLLMModelMenu(false);
     });
+    window.addEventListener('resize', function () {
+        positionLLMModelMenu();
+    });
     vscode.postMessage({ command: 'listLLMModels' });
+    vscode.postMessage({ command: 'requestSummaryUiConfig' });
 
     const classCardMemberMenu = document.getElementById('class-card-member-menu');
     classCardMemberMenu?.addEventListener('click', function (event) {
@@ -1628,42 +2113,34 @@
             ? event.target.id()
             : null;
         if (nodeId) {
-            showSummaryForNodeId(nodeId, pointFromCyEvent(event), 'graph-node');
+            scheduleSummaryHover(nodeId, pointFromCyEvent(event), 'graph-node');
         }
     });
-    cy.on('mouseout', 'node', function () {
+    cy.on('mouseout', 'node', function (event) {
+        const nodeId = event?.target && typeof event.target.id === 'function'
+            ? event.target.id()
+            : null;
+        cancelSummaryHover('node-mouseout');
+        if (nodeId && dismissedSummaryNodeId === nodeId) {
+            dismissedSummaryNodeId = null;
+        }
         hideSummaryPopover(90);
         cancelSummaryHold('node-mouseout');
     });
     cy.on('mousedown tapstart', 'node', startSummaryHold);
+    cy.on('mousemove', 'node', maybeCancelSummaryHoldByMovement);
     cy.on('mouseup tapend free drag', 'node', function () {
         cancelSummaryHold('node-release-or-drag');
     });
     cy.on('pan zoom dragfree', function () {
+        cancelSummaryHover('canvas-move');
         cancelSummaryHold('canvas-move');
     });
 
-    document.addEventListener('mouseover', function (event) {
-        const target = event.target;
-        const header = target && typeof target.closest === 'function'
-            ? target.closest('.analysis-class-card-header-action[data-node-id]')
-            : null;
-        if (!header) {
-            return;
-        }
-
-        showSummaryForNodeId(header.dataset.nodeId, {
-            x: event.clientX,
-            y: event.clientY
-        }, 'class-card-header');
-    });
-    document.addEventListener('mouseout', function (event) {
-        const target = event.target;
-        const header = target && typeof target.closest === 'function'
-            ? target.closest('.analysis-class-card-header-action[data-node-id]')
-            : null;
-        if (header) {
-            hideSummaryPopover(90);
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') {
+            hideSummaryPopoverNow('escape');
+            toggleLLMModelMenu(false);
         }
     });
 
@@ -1734,7 +2211,7 @@
                 if (tabManagerModule && typeof tabManagerModule.activate === 'function') {
                     tabManagerModule.activate('callGraph', 'editor-command');
                 }
-                callGraphTab.setCenterFunction(data.functionRef, 'editor-command');
+                callGraphTab.setCenterFunction(data.functionRef, 'editor-command', { queryImmediately: true });
             }
             return;
         }
@@ -1764,10 +2241,34 @@
             llmModels = Array.isArray(data.models) ? data.models : [];
             selectedLLMModelName = String(data.selectedModelName || '');
             renderLLMModelMenu();
+            positionLLMModelMenu();
+            return;
+        }
+
+        if (data.command === 'summaryUiConfigChanged') {
+            const nextHoverDelay = Number(data.hoverDelayMs);
+            const nextLongPress = Number(data.longPressMs);
+            summaryHoverDelayMs = Number.isFinite(nextHoverDelay) ? nextHoverDelay : 1000;
+            summaryLongPressMs = Number.isFinite(nextLongPress) ? nextLongPress : 650;
+            log('summary', 'info', 'summary UI config changed', {
+                hoverDelayMs: summaryHoverDelayMs,
+                longPressMs: summaryLongPressMs
+            });
             return;
         }
 
         if (data.command === 'functionSummaryData' || data.command === 'functionSummaryGenerated') {
+            log('summary', 'info', '[SummaryUI] backend-cache-hit', {
+                nodeId: data.nodeId,
+                reason: data.reason || 'unknown',
+                cacheStatus: data.cacheStatus || null,
+                stale: data.stale === true,
+                hasSummaryProperty: Object.prototype.hasOwnProperty.call(data, 'summary'),
+                summaryType: typeof data.summary,
+                summaryLength: data.summary !== undefined && data.summary !== null
+                    ? String(data.summary).length
+                    : 0
+            });
             if (summaryStoreModule && typeof summaryStoreModule.set === 'function') {
                 const stored = summaryStoreModule.set({
                     nodeId: data.nodeId,
@@ -1783,13 +2284,19 @@
                     historyCount: data.historyCount,
                     promptVersion: data.promptVersion
                 }, 'backend');
-                log('summary', 'info', 'function summary stored', {
+                log('summary', stored ? 'info' : 'error', stored ? '[SummaryUI] backend-cache-hit stored' : '[SummaryUI] popover-hidden-or-empty', {
                     nodeId: data.nodeId,
                     label: data.label,
                     modelId: data.modelId || null,
                     modelName: data.modelName || null,
                     cacheStatus: data.cacheStatus || null,
-                    stale: data.stale === true
+                    stale: data.stale === true,
+                    reason: data.reason || 'unknown',
+                    hasSummaryProperty: Object.prototype.hasOwnProperty.call(data, 'summary'),
+                    summaryType: typeof data.summary,
+                    summaryLength: data.summary !== undefined && data.summary !== null
+                        ? String(data.summary).length
+                        : 0
                 });
                 if (stored) {
                     vscode.postMessage({
@@ -1798,10 +2305,35 @@
                     });
                     const popover = ensureSummaryPopover();
                     if (popover && typeof popover.show === 'function') {
-                        popover.show(stored, { x: 88, y: 88 });
+                        const anchorPoint = summaryRequestAnchors.get(data.nodeId)
+                            || getSummaryNodeAnchorPoint(data.nodeId)
+                            || { x: 88, y: 88 };
+                        summaryRequestAnchors.delete(data.nodeId);
+                        const shown = popover.show(stored, anchorPoint, { anchorMode: anchorPoint.anchorSide ? 'node-side' : undefined });
+                        log('summary', shown ? 'info' : 'error', shown ? '[SummaryUI] popover-show' : '[SummaryUI] popover-hidden-or-empty', {
+                            nodeId: data.nodeId,
+                            reason: data.reason || 'unknown',
+                            x: anchorPoint.x,
+                            y: anchorPoint.y,
+                            anchorSide: anchorPoint.anchorSide || null,
+                            summaryLength: stored.summary ? String(stored.summary).length : 0
+                        });
                     }
                 }
             }
+            return;
+        }
+
+        if (data.command === 'functionSummaryMiss') {
+            if (data.nodeId) {
+                summaryRequestAnchors.delete(data.nodeId);
+            }
+            log('summary', 'info', '[SummaryUI] backend-cache-miss', {
+                nodeId: data.nodeId || null,
+                reason: data.reason || 'unknown',
+                forceRefresh: data.forceRefresh === true,
+                allowGenerate: data.allowGenerate === true
+            });
             return;
         }
 
@@ -1813,10 +2345,14 @@
         }
 
         if (data.command === 'functionSummaryError') {
-            log('summary', 'error', 'function summary failed', {
+            if (data.nodeId) {
+                summaryRequestAnchors.delete(data.nodeId);
+            }
+            log('summary', 'error', '[SummaryUI] backend-cache-query failed', {
                 nodeId: data.nodeId || null,
                 label: data.label || null,
-                message: data.message || 'Unknown summary error'
+                message: data.message || 'Unknown summary error',
+                reason: data.reason || 'unknown'
             });
             return;
         }

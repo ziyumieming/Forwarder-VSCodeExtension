@@ -147,6 +147,13 @@
           "minimum": 250,
           "maximum": 2000,
           "description": "在图节点上长按触发摘要查询的时间阈值（毫秒）。"
+        },
+        "forwarder.llm.summaryHoverDelayMs": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 0,
+          "maximum": 5000,
+          "description": "悬停已有摘要节点后显示摘要卡片的延迟时间（毫秒）。"
         }
       }
     }

@@ -16,7 +16,30 @@ export interface SummaryServiceOptions {
     queueService?: SummaryQueueService;
     modelService?: LLMModelService;
     forceRefresh?: boolean;
+    allowGenerate?: boolean;
     promptVersion?: string;
+}
+
+export class SummaryCacheMissError extends Error {
+    constructor(
+        public readonly nodeId: string,
+        public readonly modelName: string,
+        public readonly promptVersion: string
+    ) {
+        super(`No cached summary found for ${nodeId}.`);
+        this.name = 'SummaryCacheMissError';
+    }
+}
+
+export class EmptySummaryError extends Error {
+    constructor(
+        public readonly nodeId: string,
+        public readonly modelName: string,
+        public readonly rawLength: number
+    ) {
+        super(`LLM returned an empty summary for ${nodeId}.`);
+        this.name = 'EmptySummaryError';
+    }
 }
 
 export class SummaryService {
@@ -34,8 +57,10 @@ export class SummaryService {
         const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
         const modelId = selectedModel?.id;
 
-        logger.info(`[SummaryService] Function summary requested: nodeId=${context.nodeId}, label=${context.label}, model=${modelName}, selectedModelId=${modelId || '<fallback>'}, forceRefresh=${options.forceRefresh === true}, bodyHash=${context.bodyHash.slice(0, 12)}`);
-        if (options.cacheService && !options.forceRefresh) {
+        const allowGenerate = options.allowGenerate !== false;
+
+        logger.info(`[SummaryBackend] backend-cache-query nodeId=${context.nodeId}, label=${context.label}, model=${modelName}, selectedModelId=${modelId || '<fallback>'}, forceRefresh=${options.forceRefresh === true}, allowGenerate=${allowGenerate}, bodyHash=${context.bodyHash.slice(0, 12)}`);
+        if (options.cacheService && (!options.forceRefresh || !allowGenerate)) {
             const cached = await options.cacheService.lookupFunctionSummary({
                 nodeId: context.nodeId,
                 modelName,
@@ -43,9 +68,14 @@ export class SummaryService {
                 currentBodyHash: context.bodyHash
             });
             if (cached) {
-                logger.info(`[SummaryService] Returning cached function summary: nodeId=${context.nodeId}, stale=${cached.stale === true}, status=${cached.cacheStatus}`);
+                logger.info(`[SummaryBackend] backend-cache-hit nodeId=${context.nodeId}, stale=${cached.stale === true}, status=${cached.cacheStatus}, allowGenerate=${allowGenerate}, summaryType=${typeof cached.summary}, summaryLength=${String(cached.summary || '').length}`);
                 return cached;
             }
+        }
+
+        if (!allowGenerate) {
+            logger.info(`[SummaryBackend] backend-cache-miss nodeId=${context.nodeId}, model=${modelName}, prompt=${promptVersion}, allowGenerate=false`);
+            throw new SummaryCacheMissError(context.nodeId, modelName, promptVersion);
         }
 
         const queueKey = [
@@ -57,16 +87,22 @@ export class SummaryService {
         ].join('|');
 
         const generate = async () => {
-            logger.info(`[SummaryService] Generating function summary via LLM: nodeId=${context.nodeId}, model=${modelName}, selectedModelId=${modelId || '<fallback>'}`);
+            logger.info(`[SummaryBackend] llm-generate-start nodeId=${context.nodeId}, model=${modelName}, selectedModelId=${modelId || '<fallback>'}, forceRefresh=${options.forceRefresh === true}`);
             const prompt = this.buildFunctionSummaryPrompt(context);
             const response = selectedModel?.model
                 ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
                 : await llmClient.sendPrompt(prompt);
+            const summaryText = String(response.text || '').trim();
+            logger.info(`[SummaryBackend] llm-generate-response nodeId=${context.nodeId}, model=${modelName}, responseModelId=${response.modelId || '<none>'}, rawLength=${String(response.text || '').length}, trimmedLength=${summaryText.length}`);
+            if (!summaryText) {
+                logger.warn(`[SummaryBackend] llm-generate-empty nodeId=${context.nodeId}, model=${modelName}, responseModelId=${response.modelId || '<none>'}, rawLength=${String(response.text || '').length}`);
+                throw new EmptySummaryError(context.nodeId, modelName, String(response.text || '').length);
+            }
 
             const generated: FunctionSummaryData = {
                 nodeId: context.nodeId,
                 label: context.label,
-                summary: response.text.trim(),
+                summary: summaryText,
                 modelName,
                 modelId: response.modelId || modelId,
                 generatedAt: new Date().toISOString(),
@@ -84,11 +120,11 @@ export class SummaryService {
                     promptVersion,
                     bodyHash: context.bodyHash
                 });
-                logger.info(`[SummaryService] Generated function summary stored: nodeId=${context.nodeId}, model=${modelName}, status=${stored.cacheStatus}, history=${stored.historyCount || 1}`);
+                logger.info(`[SummaryBackend] llm-generate-done nodeId=${context.nodeId}, model=${modelName}, status=${stored.cacheStatus}, history=${stored.historyCount || 1}`);
                 return stored;
             }
 
-            logger.info(`[SummaryService] Generated function summary without persistent cache: nodeId=${context.nodeId}, model=${modelName}`);
+            logger.info(`[SummaryBackend] llm-generate-done nodeId=${context.nodeId}, model=${modelName}, status=${generated.cacheStatus}, persistent=false`);
             return generated;
         };
 

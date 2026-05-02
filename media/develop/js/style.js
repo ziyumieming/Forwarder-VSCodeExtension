@@ -118,11 +118,21 @@
                 {
                     selector: 'node.summary-hold-pending',
                     style: {
-                        'border-width': 5,
+                        'border-width': 3,
                         'border-color': '#ffc869',
                         'shadow-blur': 22,
                         'shadow-color': '#f3b23a',
                         'shadow-opacity': 0.75
+                    }
+                },
+                {
+                    selector: 'node.summary-triggered-pulse',
+                    style: {
+                        'border-width': 15,
+                        'border-color': '#ffe3ad',
+                        'shadow-blur': 28,
+                        'shadow-color': '#f3b23a',
+                        'shadow-opacity': 0.9
                     }
                 },
                 {

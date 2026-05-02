@@ -42,6 +42,7 @@
         var getQueryDebounceWindowMs = typeof safeContext.getQueryDebounceWindowMs === 'function' ? safeContext.getQueryDebounceWindowMs : function () { return 80; };
         var getQueryDuplicateWindowMs = typeof safeContext.getQueryDuplicateWindowMs === 'function' ? safeContext.getQueryDuplicateWindowMs : function () { return 220; };
         var shouldSuppressContextTap = typeof safeContext.shouldSuppressContextTap === 'function' ? safeContext.shouldSuppressContextTap : function () { return false; };
+        var shouldSuppressNodeTap = typeof safeContext.shouldSuppressNodeTap === 'function' ? safeContext.shouldSuppressNodeTap : function () { return false; };
         var animateCenterNodeViewport = typeof safeContext.animateCenterNodeViewport === 'function' ? safeContext.animateCenterNodeViewport : noop;
         var lockCenterNodeViewport = typeof safeContext.lockCenterNodeViewport === 'function' ? safeContext.lockCenterNodeViewport : noop;
         var isActiveTab = typeof safeContext.isActiveTab === 'function' ? safeContext.isActiveTab : function () { return true; };
@@ -245,6 +246,13 @@
             }
 
             var tappedNodeId = String(node.id());
+
+            if (shouldSuppressNodeTap(tappedNodeId)) {
+                log('summary', 'verbose', '[SummaryUI] tap-suppressed', {
+                    nodeId: tappedNodeId
+                });
+                return;
+            }
 
             if (suppressNodeTapNodeId === tappedNodeId && Date.now() <= suppressNodeTapUntil) {
                 log('state', 'verbose', 'suppress node tap after card action', {

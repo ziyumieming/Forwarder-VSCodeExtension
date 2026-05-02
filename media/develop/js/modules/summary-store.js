@@ -11,6 +11,17 @@
 
     function normalizeRecord(record) {
         if (!record || !record.nodeId || !record.summary) {
+            console.debug('[SummaryStore][SummaryUI] normalize-record-rejected', {
+                hasRecord: !!record,
+                nodeId: record && record.nodeId ? String(record.nodeId) : null,
+                hasSummaryProperty: !!(record && Object.prototype.hasOwnProperty.call(record, 'summary')),
+                summaryType: record ? typeof record.summary : 'undefined',
+                summaryLength: record && record.summary !== undefined && record.summary !== null
+                    ? String(record.summary).length
+                    : 0,
+                label: record && record.label ? String(record.label) : null,
+                cacheStatus: record && record.cacheStatus ? String(record.cacheStatus) : null
+            });
             return null;
         }
 
@@ -41,6 +52,16 @@
     }
 
     function set(record, reason) {
+        console.debug('[SummaryStore][SummaryUI] set-record-received', {
+            reason: reason || 'set',
+            nodeId: record && record.nodeId ? String(record.nodeId) : null,
+            hasSummaryProperty: !!(record && Object.prototype.hasOwnProperty.call(record, 'summary')),
+            summaryType: record ? typeof record.summary : 'undefined',
+            summaryLength: record && record.summary !== undefined && record.summary !== null
+                ? String(record.summary).length
+                : 0,
+            cacheStatus: record && record.cacheStatus ? String(record.cacheStatus) : null
+        });
         var normalized = normalizeRecord(record);
         if (!normalized) {
             return null;

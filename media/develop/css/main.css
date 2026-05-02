@@ -76,8 +76,8 @@ body {
 }
 
 .llm-model-menu {
-    position: absolute;
-    top: calc(100% + 8px);
+    position: fixed;
+    top: 0;
     left: 0;
     min-width: 220px;
     max-width: min(360px, calc(100vw - 32px));
@@ -90,7 +90,7 @@ body {
     border-radius: 10px;
     background: rgba(9, 18, 30, 0.96);
     box-shadow: 0 14px 42px rgba(0, 0, 0, 0.38);
-    z-index: 40;
+    z-index: 32;
 }
 
 .llm-model-menu[hidden] {
@@ -747,6 +747,82 @@ body {
     color: var(--text-main);
     z-index: 30;
     backdrop-filter: blur(8px);
+}
+
+.summary-hold-overlay {
+    position: fixed;
+    pointer-events: none;
+    z-index: 29;
+}
+
+.summary-hold-overlay[hidden],
+.summary-pulse-overlay[hidden] {
+    display: none;
+}
+
+.summary-pulse-overlay {
+    position: fixed;
+    pointer-events: none;
+    z-index: 28;
+    border: 3px solid rgba(255, 227, 173, 0.95);
+    border-radius: 999px;
+    box-shadow: 0 0 22px rgba(243, 178, 58, 0.72);
+    opacity: 0;
+}
+
+.summary-pulse-overlay.is-running {
+    animation: summary-pulse-scale 560ms ease-out forwards;
+}
+
+.summary-hold-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    transform: rotate(-90deg);
+}
+
+.summary-hold-track,
+.summary-hold-progress {
+    fill: none;
+    stroke-width: 6;
+}
+
+.summary-hold-track {
+    stroke: rgba(190, 221, 243, 0.16);
+}
+
+.summary-hold-progress {
+    stroke: var(--accent);
+    stroke-linecap: round;
+    stroke-dasharray: 276.46;
+    stroke-dashoffset: 276.46;
+    filter: drop-shadow(0 0 8px rgba(243, 178, 58, 0.75));
+}
+
+.summary-hold-overlay.is-running .summary-hold-progress {
+    animation: summary-hold-progress var(--summary-hold-ms, 650ms) linear forwards;
+}
+
+@keyframes summary-hold-progress {
+    to {
+        stroke-dashoffset: 0;
+    }
+}
+
+@keyframes summary-pulse-scale {
+    0% {
+        opacity: 0.95;
+        transform: scale(1);
+    }
+    28% {
+        opacity: 0.9;
+        transform: scale(1.22);
+    }
+    100% {
+        opacity: 0;
+        transform: scale(1.03);
+    }
 }
 
 .summary-popover[hidden] {

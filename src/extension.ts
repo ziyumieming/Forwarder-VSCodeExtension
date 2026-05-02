@@ -32,7 +32,7 @@ export function activate(context: vscode.ExtensionContext) {
 		singleFileUriStr = vscode.window.activeTextEditor?.document.uri.toString();
 	}
 
-	runtime.initialize(storageDir, isSingleFileMode, singleFileUriStr);
+	runtime.initialize(storageDir, isSingleFileMode, singleFileUriStr, context.globalStorageUri.fsPath);
 	runtime.runIncrementalSync().catch(err => {
 		logger.info(`后台增量同步启动失败：${err}`);
 	});

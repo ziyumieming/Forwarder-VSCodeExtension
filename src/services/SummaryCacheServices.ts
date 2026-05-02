@@ -29,22 +29,37 @@ export class SummaryCacheService {
 
     public async lookupFunctionSummary(request: SummaryLookupRequest): Promise<FunctionSummaryData | undefined> {
         const records = this.findMatchingRecords(request);
-        const latest = records[0];
-        if (!latest) {
-            logger.info(`[SummaryCacheService] Cache miss: function=${request.nodeId}, model=${request.modelName || '*'}, prompt=${request.promptVersion}`);
-            return undefined;
+        for (const record of records) {
+            const loaded = await this.loadSummary(record);
+            if (!String(loaded.summary || '').trim()) {
+                logger.warn(`[SummaryBackend] backend-cache-corrupt-empty-summary function=${request.nodeId}, model=${record.modelName}, recordKey=${record.recordKey}, status=${loaded.cacheStatus}`);
+                this.bodyCache.delete(record.recordKey);
+                await this.storage.removeRecords([record.recordKey]);
+                continue;
+            }
+
+            logger.info(`[SummaryBackend] backend-cache-hit function=${request.nodeId}, model=${record.modelName}, stale=${record.bodyHash !== request.currentBodyHash}, status=${loaded.cacheStatus}, summaryType=${typeof loaded.summary}, summaryLength=${String(loaded.summary || '').length}`);
+            return this.toFunctionSummaryData(record, loaded.summary, request.currentBodyHash, {
+                cacheStatus: loaded.cacheStatus,
+                historyIndex: 0,
+                historyCount: records.length
+            });
         }
 
-        const loaded = await this.loadSummary(latest);
-        logger.info(`[SummaryCacheService] Cache hit: function=${request.nodeId}, model=${latest.modelName}, stale=${latest.bodyHash !== request.currentBodyHash}, status=${loaded.cacheStatus}`);
-        return this.toFunctionSummaryData(latest, loaded.summary, request.currentBodyHash, {
-            cacheStatus: loaded.cacheStatus,
-            historyIndex: 0,
-            historyCount: records.length
-        });
+        if (records.length === 0) {
+            logger.info(`[SummaryBackend] backend-cache-miss function=${request.nodeId}, model=${request.modelName || '*'}, prompt=${request.promptVersion}`);
+        } else {
+            logger.info(`[SummaryBackend] backend-cache-miss function=${request.nodeId}, model=${request.modelName || '*'}, prompt=${request.promptVersion}, reason=all-matching-records-empty`);
+        }
+        return undefined;
     }
 
     public async storeGeneratedFunctionSummary(record: GeneratedFunctionSummaryRecord): Promise<FunctionSummaryData> {
+        if (!String(record.summary || '').trim()) {
+            logger.warn(`[SummaryBackend] llm-generate-empty-store-blocked function=${record.nodeId}, model=${record.modelName}, status=${record.cacheStatus || 'generated'}`);
+            throw new Error(`Refusing to store empty summary for ${record.nodeId}.`);
+        }
+
         const recordKey = this.createRecordKey(record);
         const stored: SummaryStoredRecord = {
             recordKey,

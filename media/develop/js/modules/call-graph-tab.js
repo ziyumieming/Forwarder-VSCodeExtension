@@ -92,6 +92,9 @@
         var clearCanvas = typeof safeContext.clearCanvas === 'function' ? safeContext.clearCanvas : noop;
         var renderGraphData = typeof safeContext.renderGraphData === 'function' ? safeContext.renderGraphData : noop;
         var isActiveTab = typeof safeContext.isActiveTab === 'function' ? safeContext.isActiveTab : function () { return false; };
+        var shouldSuppressNodeTap = typeof safeContext.shouldSuppressNodeTap === 'function'
+            ? safeContext.shouldSuppressNodeTap
+            : function () { return false; };
         var captureGraphView = typeof safeContext.captureGraphView === 'function' ? safeContext.captureGraphView : noop;
         var restoreGraphView = typeof safeContext.restoreGraphView === 'function' ? safeContext.restoreGraphView : function () { return false; };
         var hasGraphViewState = typeof safeContext.hasGraphViewState === 'function' ? safeContext.hasGraphViewState : function () { return false; };
@@ -161,15 +164,21 @@
             return state.cursorFunctionCandidate || getPathSlots()[0] || null;
         }
 
-        function setCenterFunction(functionRef, source) {
+        function setCenterFunction(functionRef, source, options) {
+            var safeOptions = options || {};
             state.centerFunction = cloneFunctionRef(functionRef);
             state.hasRenderedCallGraph = false;
             updateUi();
 
             log('state', 'info', 'call graph center set', {
                 source: source || 'unknown',
-                centerFunctionId: state.centerFunction ? state.centerFunction.id : null
+                centerFunctionId: state.centerFunction ? state.centerFunction.id : null,
+                queryImmediately: safeOptions.queryImmediately === true
             });
+
+            if (safeOptions.queryImmediately === true) {
+                requestCenterGraph(source || 'set-center');
+            }
         }
 
         function addPathSlot(functionRef) {
@@ -348,7 +357,7 @@
             }
 
             if (action === 'center') {
-                setCenterFunction(functionRef, 'context-menu');
+                setCenterFunction(functionRef, 'context-menu', { queryImmediately: true });
                 return;
             }
 
@@ -406,7 +415,7 @@
             refs.useCursorCenter?.addEventListener('click', function () {
                 var candidate = getCandidateCenter();
                 if (candidate) {
-                    setCenterFunction(candidate, state.cursorFunctionCandidate ? 'empty-overlay-cursor' : 'empty-overlay-path');
+                    setCenterFunction(candidate, state.cursorFunctionCandidate ? 'empty-overlay-cursor' : 'empty-overlay-path', { queryImmediately: true });
                 }
             });
             refs.contextMenu?.addEventListener('click', function (event) {
@@ -448,6 +457,12 @@
                     return;
                 }
                 hideContextMenu();
+                if (event.target && typeof event.target.id === 'function' && shouldSuppressNodeTap(event.target.id())) {
+                    log('summary', 'verbose', '[SummaryUI] tap-suppressed', {
+                        nodeId: event.target.id()
+                    });
+                    return;
+                }
                 var functionRef = nodeToFunctionRef(event.target);
                 if (functionRef) {
                     setCenterFunction(functionRef, 'node-tap');

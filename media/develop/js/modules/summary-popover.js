@@ -65,6 +65,7 @@
         var root = document.getElementById('summary-popover');
         var hideTimer = null;
         var currentRecord = null;
+        var currentPoint = null;
 
         if (!root) {
             root = document.createElement('div');
@@ -74,20 +75,32 @@
             document.body.appendChild(root);
         }
 
-        function positionAt(clientX, clientY) {
+        function positionAt(clientX, clientY, options) {
+            var safeOptions = options || {};
             var margin = 12;
             var width = root.offsetWidth || 320;
             var height = root.offsetHeight || 180;
-            var left = Math.min(window.innerWidth - width - margin, Math.max(margin, clientX + 14));
-            var top = Math.min(window.innerHeight - height - margin, Math.max(margin, clientY + 14));
+            var offset = safeOptions.anchorMode === 'node-side' ? 0 : 14;
+            var left = Math.min(window.innerWidth - width - margin, Math.max(margin, clientX + offset));
+            var top = Math.min(window.innerHeight - height - margin, Math.max(margin, clientY + offset));
             root.style.left = Math.round(left) + 'px';
             root.style.top = Math.round(top) + 'px';
         }
 
-        function show(record, point) {
+        function show(record, point, options) {
             if (!record || !record.summary) {
+                log('summary', 'error', '[SummaryUI] popover-hidden-or-empty show-rejected', {
+                    hasRecord: !!record,
+                    nodeId: record && record.nodeId ? record.nodeId : null,
+                    hasSummaryProperty: !!(record && Object.prototype.hasOwnProperty.call(record, 'summary')),
+                    summaryType: record ? typeof record.summary : 'undefined',
+                    summaryLength: record && record.summary !== undefined && record.summary !== null
+                        ? String(record.summary).length
+                        : 0
+                });
                 return false;
             }
+            var safeOptions = options || {};
             currentRecord = record;
 
             if (hideTimer) {
@@ -114,10 +127,20 @@
                     : ''
             ].join('');
             root.hidden = false;
-            positionAt(point && Number.isFinite(point.x) ? point.x : 80, point && Number.isFinite(point.y) ? point.y : 80);
+            if (!safeOptions.preservePosition) {
+                currentPoint = {
+                    x: point && Number.isFinite(point.x) ? point.x : 80,
+                    y: point && Number.isFinite(point.y) ? point.y : 80
+                };
+                positionAt(currentPoint.x, currentPoint.y, safeOptions);
+            }
 
             log('state', 'verbose', 'summary popover shown', {
-                nodeId: record.nodeId
+                nodeId: record.nodeId,
+                summaryLength: String(record.summary || '').length,
+                left: root.style.left,
+                top: root.style.top,
+                hidden: root.hidden === true
             });
             return true;
         }
@@ -131,6 +154,18 @@
                 root.hidden = true;
                 hideTimer = null;
             }, Math.max(0, delay));
+        }
+
+        function hideNow() {
+            if (hideTimer) {
+                clearTimeout(hideTimer);
+                hideTimer = null;
+            }
+            root.hidden = true;
+        }
+
+        function getCurrentRecord() {
+            return currentRecord ? { ...currentRecord } : null;
         }
 
         root.addEventListener('mouseenter', function () {
@@ -164,16 +199,15 @@
             }
 
             if (nextRecord) {
-                show(nextRecord, {
-                    x: root.getBoundingClientRect().left,
-                    y: root.getBoundingClientRect().top
-                });
+                show(nextRecord, currentPoint || { x: 80, y: 80 }, { preservePosition: true });
             }
         });
 
         return {
             show: show,
-            hide: hide
+            hide: hide,
+            hideNow: hideNow,
+            getCurrentRecord: getCurrentRecord
         };
     }
 

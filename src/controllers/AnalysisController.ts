@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { AnalysisViewProvider } from '../providers/AnalysisView';
 import { AnalysisRuntime } from '../services/AnalysisRuntime';
+import { SummaryCacheMissError } from '../services/SummaryServices';
 import { logger } from '../utils/logger';
 
 export class AnalysisController {
@@ -8,6 +9,7 @@ export class AnalysisController {
     private cursorCandidateTimer?: ReturnType<typeof setTimeout>;
     private cursorCandidateRequestSeq = 0;
     private indexStatusSubscription: vscode.Disposable;
+    private configSubscription: vscode.Disposable;
 
     constructor(private readonly provider: AnalysisViewProvider, runtime?: AnalysisRuntime) {
         this.runtime = runtime || AnalysisRuntime.getInstance();
@@ -20,6 +22,12 @@ export class AnalysisController {
 
             if (status.snapshotReady && !status.isUpdating && status.suggestRequery) {
                 this.handleEditorSelectionChanged(vscode.window.activeTextEditor);
+            }
+        });
+        this.configSubscription = vscode.workspace.onDidChangeConfiguration(event => {
+            if (event.affectsConfiguration('forwarder.llm.longPressMs') ||
+                event.affectsConfiguration('forwarder.llm.summaryHoverDelayMs')) {
+                this.postSummaryUiConfig();
             }
         });
     }
@@ -112,22 +120,39 @@ export class AnalysisController {
             }
 
             case 'queryFunctionSummary': {
-                logger.info(`[AnalysisController] queryFunctionSummary nodeId=${data.nodeId}, forceRefresh=${data.forceRefresh === true}`);
+                const allowGenerate = data.allowGenerate !== false;
+                const reason = String(data.reason || 'unknown');
+                logger.info(`[SummaryBackend] backend-cache-query controller nodeId=${data.nodeId}, forceRefresh=${data.forceRefresh === true}, allowGenerate=${allowGenerate}, reason=${reason}`);
                 try {
                     const summary = await this.runtime.queryFunctionSummary(
                         String(data.nodeId || ''),
-                        data.forceRefresh === true
+                        data.forceRefresh === true,
+                        allowGenerate,
+                        reason
                     );
-                    logger.info(`[AnalysisController] queryFunctionSummary result nodeId=${summary.nodeId}, status=${summary.cacheStatus}, stale=${summary.stale === true}`);
+                    logger.info(`[SummaryBackend] backend-cache-hit controller-result nodeId=${summary.nodeId}, status=${summary.cacheStatus}, stale=${summary.stale === true}, reason=${reason}, summaryType=${typeof summary.summary}, summaryLength=${String(summary.summary || '').length}`);
                     this.provider.postMessage({
                         command: 'functionSummaryData',
+                        reason,
                         ...summary
                     });
                 } catch (error: any) {
-                    logger.info(`[AnalysisController] queryFunctionSummary failed nodeId=${data.nodeId}: ${error?.message || error}`);
+                    if (error instanceof SummaryCacheMissError) {
+                        logger.info(`[SummaryBackend] backend-cache-miss controller-result nodeId=${data.nodeId}, reason=${reason}, allowGenerate=${allowGenerate}`);
+                        this.provider.postMessage({
+                            command: 'functionSummaryMiss',
+                            nodeId: data.nodeId,
+                            reason,
+                            allowGenerate,
+                            forceRefresh: data.forceRefresh === true
+                        });
+                        break;
+                    }
+                    logger.info(`[SummaryBackend] backend-cache-query failed nodeId=${data.nodeId}, reason=${reason}: ${error?.message || error}`);
                     this.provider.postMessage({
                         command: 'functionSummaryError',
                         nodeId: data.nodeId,
+                        reason,
                         message: error?.message || String(error)
                     });
                 }
@@ -155,6 +180,11 @@ export class AnalysisController {
                 break;
             }
 
+            case 'requestSummaryUiConfig': {
+                this.postSummaryUiConfig();
+                break;
+            }
+
             default:
                 logger.info(`[AnalysisController] unknown webview command: ${data.command}`);
                 break;
@@ -169,6 +199,23 @@ export class AnalysisController {
             __queryMode: request.__queryMode,
             __querySignature: request.__querySignature
         });
+    }
+
+    private postSummaryUiConfig(): void {
+        const configuration = vscode.workspace.getConfiguration('forwarder.llm');
+        this.provider.postMessage({
+            command: 'summaryUiConfigChanged',
+            hoverDelayMs: this.normalizeMs(configuration.get('summaryHoverDelayMs', 1000), 1000, 0, 5000),
+            longPressMs: this.normalizeMs(configuration.get('longPressMs', 650), 650, 250, 2000)
+        });
+    }
+
+    private normalizeMs(value: unknown, fallback: number, min: number, max: number): number {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+            return fallback;
+        }
+        return Math.min(max, Math.max(min, Math.round(numeric)));
     }
 
     public async handleAnalyzeActiveFileCommand(): Promise<void> {
@@ -257,6 +304,7 @@ export class AnalysisController {
 
             this.provider.postMessage({
                 command: 'functionSummaryData',
+                reason: 'debug-command',
                 ...summaryData
             });
             vscode.window.showInformationMessage(`Summary ready: ${summaryData.label}`);
@@ -321,6 +369,7 @@ export class AnalysisController {
 
     public dispose(): void {
         this.indexStatusSubscription.dispose();
+        this.configSubscription.dispose();
         if (this.cursorCandidateTimer) {
             clearTimeout(this.cursorCandidateTimer);
         }

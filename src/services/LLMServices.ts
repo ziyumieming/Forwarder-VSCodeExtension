@@ -61,10 +61,7 @@ export class LLMService {
             try {
                 const response = await model.sendRequest(messages, {}, token || fallbackTokenSource!.token);
 
-                let fullResponse = "";
-                for await (const fragment of response.text) {
-                    fullResponse += fragment;
-                }
+                const fullResponse = await this.collectTextResponse(response.text, model.id, 'default-model');
 
                 return {
                     text: fullResponse,
@@ -92,10 +89,7 @@ export class LLMService {
 
         try {
             const response = await model.sendRequest(messages, {}, token || fallbackTokenSource!.token);
-            let fullResponse = "";
-            for await (const fragment of response.text) {
-                fullResponse += fragment;
-            }
+            const fullResponse = await this.collectTextResponse(response.text, model.id, 'selected-model');
 
             return {
                 text: fullResponse,
@@ -107,5 +101,29 @@ export class LLMService {
         } finally {
             fallbackTokenSource?.dispose();
         }
+    }
+
+    private static async collectTextResponse(
+        textStream: AsyncIterable<string>,
+        modelId: string,
+        source: string
+    ): Promise<string> {
+        let fullResponse = "";
+        let fragmentCount = 0;
+        let firstFragmentLength: number | undefined;
+        let lastFragmentLength = 0;
+
+        for await (const fragment of textStream) {
+            const text = String(fragment || '');
+            fragmentCount += 1;
+            if (firstFragmentLength === undefined) {
+                firstFragmentLength = text.length;
+            }
+            lastFragmentLength = text.length;
+            fullResponse += text;
+        }
+
+        logger.info(`[SummaryBackend] llm-response-stream-complete modelId=${modelId}, source=${source}, fragmentCount=${fragmentCount}, firstFragmentLength=${firstFragmentLength ?? 0}, lastFragmentLength=${lastFragmentLength}, rawLength=${fullResponse.length}, trimmedLength=${fullResponse.trim().length}`);
+        return fullResponse;
     }
 }
