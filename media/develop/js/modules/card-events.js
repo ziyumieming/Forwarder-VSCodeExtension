@@ -42,7 +42,6 @@
         var onHeaderAction = typeof safeOptions.onHeaderAction === 'function' ? safeOptions.onHeaderAction : noop;
         var onSectionToggle = typeof safeOptions.onSectionToggle === 'function' ? safeOptions.onSectionToggle : noop;
         var onMemberClick = typeof safeOptions.onMemberClick === 'function' ? safeOptions.onMemberClick : noop;
-        var onMemberHover = typeof safeOptions.onMemberHover === 'function' ? safeOptions.onMemberHover : noop;
         var onMemberContextMenu = typeof safeOptions.onMemberContextMenu === 'function' ? safeOptions.onMemberContextMenu : noop;
         var onMemberContextIntent = typeof safeOptions.onMemberContextIntent === 'function' ? safeOptions.onMemberContextIntent : noop;
         var onIgnoreClick = typeof safeOptions.onIgnoreClick === 'function' ? safeOptions.onIgnoreClick : noop;
@@ -118,36 +117,6 @@
             event.stopPropagation();
             sectionBody.scrollTop += deltaY;
         }, { passive: false });
-
-        addListener(documentRef, 'mouseover', function (event) {
-            var item = getClosest(event.target, '.analysis-class-card-member');
-            if (!item) {
-                return;
-            }
-
-            var related = event.relatedTarget;
-            if (related && item.contains(related)) {
-                return;
-            }
-
-            item.classList.add('is-hover');
-            onMemberHover(item, 'enter', event);
-        });
-
-        addListener(documentRef, 'mouseout', function (event) {
-            var item = getClosest(event.target, '.analysis-class-card-member');
-            if (!item) {
-                return;
-            }
-
-            var related = event.relatedTarget;
-            if (related && item.contains(related)) {
-                return;
-            }
-
-            item.classList.remove('is-hover');
-            onMemberHover(item, 'leave', event);
-        });
 
         addListener(documentRef, 'click', function (event) {
             var headerAction = getClosest(event.target, '.analysis-class-card-header-action');

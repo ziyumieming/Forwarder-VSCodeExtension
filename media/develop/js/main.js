@@ -217,6 +217,27 @@
         return shown;
     }
 
+    function requestSummaryCacheRevalidation(nodeId, point, source) {
+        if (!nodeId) {
+            return;
+        }
+
+        summaryRequestAnchors.set(nodeId, point || getSummaryNodeAnchorPoint(nodeId) || { x: 88, y: 88 });
+        log('summary', 'info', '[SummaryUI] backend-cache-query', {
+            nodeId,
+            reason: source || 'hover-revalidate',
+            forceRefresh: false,
+            allowGenerate: false
+        });
+        vscode.postMessage({
+            command: 'queryFunctionSummary',
+            nodeId,
+            forceRefresh: false,
+            allowGenerate: false,
+            reason: source || 'hover-revalidate'
+        });
+    }
+
     function cancelSummaryHover(reason) {
         if (summaryHoverState && summaryHoverState.timer) {
             clearTimeout(summaryHoverState.timer);
@@ -255,21 +276,10 @@
                 if (!pending || dismissedSummaryNodeId === pending.nodeId) {
                     return;
                 }
-                if (!showSummaryForNodeId(pending.nodeId, pending.point, pending.source)) {
-                    summaryRequestAnchors.set(pending.nodeId, pending.point || getSummaryNodeAnchorPoint(pending.nodeId) || { x: 88, y: 88 });
-                    log('summary', 'info', '[SummaryUI] backend-cache-query', {
-                        nodeId: pending.nodeId,
-                        reason: 'hover',
-                        forceRefresh: false,
-                        allowGenerate: false
-                    });
-                    vscode.postMessage({
-                        command: 'queryFunctionSummary',
-                        nodeId: pending.nodeId,
-                        forceRefresh: false,
-                        allowGenerate: false,
-                        reason: 'hover'
-                    });
+                if (showSummaryForNodeId(pending.nodeId, pending.point, pending.source)) {
+                    requestSummaryCacheRevalidation(pending.nodeId, pending.point, 'hover-revalidate');
+                } else {
+                    requestSummaryCacheRevalidation(pending.nodeId, pending.point, 'hover');
                 }
             }, Math.max(0, Number(summaryHoverDelayMs || 0)))
         };
@@ -397,6 +407,15 @@
     function isFunctionSummaryTarget(node) {
         const kind = getNodeKind(node);
         return kind === 'function' || kind === 'method';
+    }
+
+    function isHtmlCenterClassCard(node) {
+        if (!node || typeof node.data !== 'function') {
+            return false;
+        }
+        return (node.hasClass && node.hasClass('center-class-card'))
+            || Number(node.data('useHtmlCard')) === 1
+            || Number(node.data('isCenterClassCard')) === 1;
     }
 
     function ensureSummaryHoldOverlay() {
@@ -712,6 +731,12 @@
     function startSummaryHold(event) {
         const node = event?.target;
         if (!node || typeof node.id !== 'function') {
+            return;
+        }
+        if (isHtmlCenterClassCard(node)) {
+            log('summary', 'verbose', '[SummaryUI] long-press-skipped-center-card', {
+                nodeId: node.id()
+            });
             return;
         }
 
@@ -1464,15 +1489,6 @@
                 } else {
                     collapsedCardSections.delete(sectionName);
                 }
-            },
-            onMemberHover: (item, phase) => {
-                dispatchCardCommand('classCardMemberHover', {
-                    nodeId: item.dataset.nodeId,
-                    memberKind: item.dataset.memberKind,
-                    memberId: item.dataset.memberId,
-                    memberLabel: item.dataset.memberLabel,
-                    phase
-                });
             },
             onMemberClick: (item) => {
                 if (item.dataset.memberKind === 'method'
