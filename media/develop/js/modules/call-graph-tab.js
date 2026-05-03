@@ -8,6 +8,11 @@
 
     function noop() { }
 
+    function translate(key, params) {
+        var i18n = modules.I18n;
+        return i18n && typeof i18n.t === 'function' ? i18n.t(key, params) : String(key || '');
+    }
+
     function firstNonBlank() {
         for (var i = 0; i < arguments.length; i += 1) {
             var value = arguments[i];
@@ -27,7 +32,7 @@
     function labelFromId(nodeId) {
         var id = String(nodeId || '').trim();
         if (!id) {
-            return 'Unknown function';
+            return translate('pathTray.unknownFunction');
         }
 
         var hashParts = id.split('#').filter(function (part) {
@@ -87,6 +92,10 @@
         var cy = safeContext.cy;
         var selectionStore = safeContext.selectionStore;
         var queryService = safeContext.queryService;
+        var i18n = safeContext.i18n || modules.I18n || null;
+        var t = function (key, params) {
+            return i18n && typeof i18n.t === 'function' ? i18n.t(key, params) : translate(key, params);
+        };
         var postMessage = typeof safeContext.postMessage === 'function' ? safeContext.postMessage : null;
         var log = typeof safeContext.log === 'function' ? safeContext.log : noop;
         var clearCanvas = typeof safeContext.clearCanvas === 'function' ? safeContext.clearCanvas : noop;
@@ -323,24 +332,24 @@
             if (refs.centerPill) {
                 refs.centerPill.textContent = hasCenter
                     ? (state.centerFunction.label || labelFromId(state.centerFunction.id))
-                    : 'No center';
+                    : t('call.noCenter');
                 refs.centerPill.title = hasCenter
                     ? [state.centerFunction.id, state.centerFunction.meta].filter(Boolean).join('\n')
-                    : 'No center selected';
+                    : t('call.noCenterSelected');
             }
             if (refs.useCursorCenter) {
                 refs.useCursorCenter.disabled = !candidateCenter;
                 refs.useCursorCenter.textContent = state.cursorFunctionCandidate
-                    ? 'Use Cursor as Center'
-                    : 'Use Path Candidate';
+                    ? t('call.empty.useCursorCenter')
+                    : t('call.empty.usePathCandidate');
                 refs.useCursorCenter.title = candidateCenter
                     ? [candidateCenter.id, candidateCenter.meta].filter(Boolean).join('\n')
-                    : 'No cursor function candidate';
+                    : t('call.empty.noCursorCandidate');
             }
             if (refs.emptyText) {
                 refs.emptyText.textContent = candidateCenter
-                    ? 'Candidate: ' + (candidateCenter.label || labelFromId(candidateCenter.id))
-                    : 'Move the editor cursor into a function, or choose a function node as the center.';
+                    ? t('call.empty.candidate', { label: candidateCenter.label || labelFromId(candidateCenter.id) })
+                    : t('call.empty.text');
             }
             if (refs.emptyOverlay) {
                 refs.emptyOverlay.hidden = !isActiveTab() || hasCenter || state.hasRenderedCallGraph;
@@ -546,6 +555,7 @@
             requestCenterGraph: requestCenterGraph,
             requestPathGraph: requestPathGraph,
             replayLastQuery: replayLastQuery,
+            refreshUi: updateUi,
             addPathSlot: addPathSlot,
             setCenterFunction: setCenterFunction,
             setCursorFunctionCandidate: function (functionRef) {

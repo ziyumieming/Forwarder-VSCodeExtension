@@ -1,0 +1,22 @@
+{
+  "forwarder.commands.analyze0": "Go Forwarder",
+  "forwarder.commands.analyze": "Forwarder: Analyze Current File",
+  "forwarder.commands.addFunctionToCallPath": "Forwarder: Add Function to Call Path",
+  "forwarder.commands.setFunctionAsCallCenter": "Forwarder: Set Function as Call Graph Center",
+  "forwarder.commands.debug.analyze": "Debug: Diagnose Analysis Flow",
+  "forwarder.commands.debug.lspTypeHierarchy": "Debug: Diagnose LSP Type Hierarchy",
+  "forwarder.commands.debug.lspCallHierarchy": "Debug: Diagnose LSP Call Hierarchy",
+  "forwarder.commands.debug.queryRelations": "Debug: Diagnose Graph Query Capability",
+  "forwarder.commands.debug.clearAndRebuild": "Debug: Clear and Rebuild Code Graph",
+  "forwarder.commands.debug.summarizeActiveFunction": "Debug: Summarize Active Function",
+  "forwarder.views.container.title": "Forwarder Code Summary",
+  "forwarder.views.analysis.name": "Code Graph",
+  "forwarder.configuration.title": "Forwarder",
+  "forwarder.configuration.ui.language.description": "Controls the language used by the Forwarder UI. Use auto to follow the VS Code display language.",
+  "forwarder.configuration.analysis.includePattern.description": "Glob pattern for files that should be scanned and included in the code graph.",
+  "forwarder.configuration.analysis.excludePattern.description": "Glob pattern for folders and files that should be excluded from structure scanning.",
+  "forwarder.configuration.llm.defaultModelName.description": "Display name of the default LLM model. Leave empty to use the first available model.",
+  "forwarder.configuration.llm.summaryConcurrency.description": "Maximum concurrency for the summary generation queue.",
+  "forwarder.configuration.llm.longPressMs.description": "Long-press duration in milliseconds required to trigger a summary query on graph nodes.",
+  "forwarder.configuration.llm.summaryHoverDelayMs.description": "Delay in milliseconds before showing a summary card when hovering a node with an existing summary."
+}

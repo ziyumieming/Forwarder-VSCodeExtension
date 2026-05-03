@@ -61,6 +61,10 @@
         var safeContext = context || {};
         var log = typeof safeContext.log === 'function' ? safeContext.log : function () { };
         var store = safeContext.summaryStore || null;
+        var i18n = safeContext.i18n || modules.I18n || null;
+        var t = function (key, params) {
+            return i18n && typeof i18n.t === 'function' ? i18n.t(key, params) : String(key || '');
+        };
         var onRefresh = typeof safeContext.onRefresh === 'function' ? safeContext.onRefresh : function () { };
         var root = document.getElementById('summary-popover');
         var hideTimer = null;
@@ -109,23 +113,23 @@
             }
 
             var staleBadges = [
-                (record.stale || record.ownStale) ? '<span class="summary-stale-badge" title="Source changed after this summary was generated">STALE</span>' : '',
-                record.relationContextStale ? '<span class="summary-relation-stale-badge" title="Related class context changed after this summary was generated">RELATION STALE</span>' : ''
+                (record.stale || record.ownStale) ? '<span class="summary-stale-badge" title="' + escapeHtml(t('summary.staleTitle')) + '">' + escapeHtml(t('summary.stale')) + '</span>' : '',
+                record.relationContextStale ? '<span class="summary-relation-stale-badge" title="' + escapeHtml(t('summary.relationStaleTitle')) + '">' + escapeHtml(t('summary.relationStale')) + '</span>' : ''
             ].join('');
 
             root.innerHTML = [
                 '<div class="summary-popover-head">',
-                '<button class="summary-popover-nav" type="button" data-summary-action="prev-model" title="Previous model cache">&lt;</button>',
+                '<button class="summary-popover-nav" type="button" data-summary-action="prev-model" title="' + escapeHtml(t('summary.previousModel')) + '">&lt;</button>',
                 '<div class="summary-popover-title">' + escapeHtml(record.label || record.nodeId) + '</div>',
                 staleBadges,
-                '<button class="summary-popover-nav" type="button" data-summary-action="next-model" title="Next model cache">&gt;</button>',
+                '<button class="summary-popover-nav" type="button" data-summary-action="next-model" title="' + escapeHtml(t('summary.nextModel')) + '">&gt;</button>',
                 '</div>',
                 '<div class="summary-popover-body">' + renderMarkdownSubset(record.summary) + '</div>',
                 '<div class="summary-popover-controls">',
-                '<button class="summary-popover-nav" type="button" data-summary-action="prev-history" title="Previous summary history">&lt;</button>',
-                '<span class="summary-popover-history">' + escapeHtml('History ' + ((record.historyIndex || 0) + 1) + '/' + (record.historyCount || 1)) + '</span>',
-                '<button class="summary-popover-nav" type="button" data-summary-action="next-history" title="Next summary history">&gt;</button>',
-                '<button class="summary-popover-refresh" type="button" data-summary-action="refresh">Refresh</button>',
+                '<button class="summary-popover-nav" type="button" data-summary-action="prev-history" title="' + escapeHtml(t('summary.previousHistory')) + '">&lt;</button>',
+                '<span class="summary-popover-history">' + escapeHtml(t('summary.history', { current: ((record.historyIndex || 0) + 1), total: (record.historyCount || 1) })) + '</span>',
+                '<button class="summary-popover-nav" type="button" data-summary-action="next-history" title="' + escapeHtml(t('summary.nextHistory')) + '">&gt;</button>',
+                '<button class="summary-popover-refresh" type="button" data-summary-action="refresh">' + escapeHtml(t('summary.refresh')) + '</button>',
                 '</div>',
                 record.modelId || record.generatedAt
                     ? '<div class="summary-popover-meta">' + escapeHtml([record.modelName, record.modelId, record.cacheStatus, record.generatedAt].filter(Boolean).join(' - ')) + '</div>'
@@ -212,6 +216,9 @@
             show: show,
             hide: hide,
             hideNow: hideNow,
+            isVisible: function () {
+                return root.hidden !== true;
+            },
             getCurrentRecord: getCurrentRecord
         };
     }

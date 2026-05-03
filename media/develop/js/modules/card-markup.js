@@ -19,6 +19,11 @@
         return escapeHtml(text).replace(/\s+/g, ' ').trim();
     }
 
+    function translate(key, params) {
+        var i18n = modules.I18n;
+        return i18n && typeof i18n.t === 'function' ? i18n.t(key, params) : String(key || '');
+    }
+
     function buildClassMemberRow(nodeId, memberKind, member, index) {
         var rawText = typeof member === 'string'
             ? member
@@ -34,7 +39,7 @@
             + '" data-member-index="' + escapeAttr(index)
             + '" data-member-range="' + escapeAttr(memberRange)
             + '" data-member-label="' + escapeAttr(memberLabel)
-            + '">' + escapeHtml(memberLabel || '(unknown)') + '</button>';
+            + '">' + escapeHtml(memberLabel || translate('classCard.unknownMember')) + '</button>';
     }
 
     function buildCardSection(nodeId, sectionName, title, rowsHtml, isSectionCollapsed) {
@@ -55,6 +60,10 @@
 
     function buildHtmlClassCard(nodeId, classCard, options) {
         var safeOptions = options || {};
+        var i18n = safeOptions.i18n || modules.I18n || null;
+        var t = function (key, params) {
+            return i18n && typeof i18n.t === 'function' ? i18n.t(key, params) : translate(key, params);
+        };
         var getClassCardOptions = typeof safeOptions.getClassCardOptions === 'function'
             ? safeOptions.getClassCardOptions
             : function () {
@@ -89,16 +98,16 @@
             ? fields.map(function (field, index) {
                 return buildClassMemberRow(nodeId, 'field', field, index);
             }).join('')
-            : '<div class="analysis-class-card-empty">No fields</div>';
+            : '<div class="analysis-class-card-empty">' + escapeHtml(t('classCard.noFields')) + '</div>';
 
         var methodRows = methods.length > 0
             ? methods.map(function (method, index) {
                 return buildClassMemberRow(nodeId, 'method', method, index);
             }).join('')
-            : '<div class="analysis-class-card-empty">No methods</div>';
+            : '<div class="analysis-class-card-empty">' + escapeHtml(t('classCard.noMethods')) + '</div>';
 
-        var fieldSection = buildCardSection(nodeId, 'fields', 'Fields', fieldRows, isSectionCollapsed);
-        var methodSection = buildCardSection(nodeId, 'methods', 'Methods', methodRows, isSectionCollapsed);
+        var fieldSection = buildCardSection(nodeId, 'fields', t('classCard.fields'), fieldRows, isSectionCollapsed);
+        var methodSection = buildCardSection(nodeId, 'methods', t('classCard.methods'), methodRows, isSectionCollapsed);
 
         return '<div id="htmlLabel:' + escapeAttr(nodeId)
             + '" class="analysis-class-card" data-node-id="' + escapeAttr(nodeId)

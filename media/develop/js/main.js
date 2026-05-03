@@ -33,6 +33,7 @@
 
     const loggerModule = window.AnalysisModules?.Logger;
     const pluginManagerModule = window.AnalysisModules?.PluginManager;
+    const i18nModule = window.AnalysisModules?.I18n;
     const cardMarkupModule = window.AnalysisModules?.CardMarkup;
     const cardRenderModule = window.AnalysisModules?.CardRender;
     const cardEventsModule = window.AnalysisModules?.CardEvents;
@@ -149,6 +150,10 @@
         log('general', 'error', args[0], { details: args[1] });
     };
 
+    const t = (key, params) => i18nModule && typeof i18nModule.t === 'function'
+        ? i18nModule.t(key, params)
+        : String(key || '');
+
     function ensureSummaryPopover() {
         if (!summaryPopover
             && summaryPopoverModule
@@ -156,6 +161,7 @@
             summaryPopover = summaryPopoverModule.create({
                 log,
                 summaryStore: summaryStoreModule,
+                i18n: i18nModule,
                 onRefresh: (record) => {
                     if (record && record.nodeId) {
                         summaryRequestAnchors.set(record.nodeId, getSummaryNodePopoverPoint(record.nodeId) || getSummaryNodeAnchorPoint(record.nodeId) || { x: 88, y: 88 });
@@ -354,7 +360,7 @@
         }
 
         if (!Array.isArray(llmModels) || llmModels.length === 0) {
-            menu.innerHTML = '<button class="llm-model-option" type="button" disabled>No models available</button>';
+            menu.innerHTML = '<button class="llm-model-option" type="button" disabled>' + escapeHtml(t('summary.noModel')) + '</button>';
             return;
         }
 
@@ -364,7 +370,7 @@
             return [
                 '<button class="llm-model-option' + (selected ? ' is-selected' : '') + '" type="button" role="menuitem" data-model-name="' + escapeHtmlAttribute(name) + '">',
                 '<span>' + escapeHtml(name) + '</span>',
-                selected ? '<span class="llm-model-option-mark">selected</span>' : '',
+                selected ? '<span class="llm-model-option-mark">' + escapeHtml(t('model.selected')) + '</span>' : '',
                 '</button>'
             ].join('');
         }).join('');
@@ -578,13 +584,13 @@
     function renderDeterministicPathSummaryFailure(graphData) {
         const reason = graphData?.meta?.reason
             || (Array.isArray(graphData?.meta?.segments) && graphData.meta.segments.find(segment => segment && segment.pathFound === false)?.reason)
-            || 'No complete call path was found for the selected waypoints.';
+            || t('pathSummary.noCompletePath');
         setPathSummaryContent('error', [
             '### 执行意图',
             reason,
             '',
             '### 路径步骤',
-            'No complete path is available.'
+            t('pathTray.needTwo')
         ].join('\n'));
     }
 
@@ -623,10 +629,10 @@
         }
         setPathSummaryContent('error', [
             '### 执行意图',
-            data?.message || 'Call path summary failed.',
+            data?.message || t('pathSummary.error'),
             '',
             '### 路径步骤',
-            'The path graph may still be available, but no explanation was generated.'
+            t('pathTray.queryOrdered')
         ].join('\n'));
     }
 
@@ -1129,6 +1135,7 @@
     const buildHtmlClassCard = (nodeId, classCard) => {
         if (cardMarkupModule && typeof cardMarkupModule.buildHtmlClassCard === 'function') {
             return cardMarkupModule.buildHtmlClassCard(nodeId, classCard, {
+                i18n: i18nModule,
                 getClassCardOptions,
                 markSectionCollapsed: (sectionName) => {
                     collapsedCardSections.add(String(sectionName));
@@ -2173,6 +2180,7 @@
     if (callPathTrayModule && typeof callPathTrayModule.create === 'function') {
         callPathTray = callPathTrayModule.create({
             selectionStore: selectionStoreModule,
+            i18n: i18nModule,
             log,
             getActiveTabId: () => tabManagerModule && typeof tabManagerModule.getActiveTabId === 'function'
                 ? tabManagerModule.getActiveTabId()
@@ -2259,6 +2267,7 @@
             cy,
             selectionStore: selectionStoreModule,
             queryService: queryServiceModule,
+            i18n: i18nModule,
             log,
             postMessage: (message) => vscode.postMessage(message),
             clearCanvas,
@@ -2335,8 +2344,33 @@
     window.addEventListener('resize', function () {
         positionLLMModelMenu();
     });
+    if (i18nModule && typeof i18nModule.apply === 'function') {
+        i18nModule.apply(document);
+    }
+    if (i18nModule && typeof i18nModule.subscribe === 'function') {
+        i18nModule.subscribe(function () {
+            if (callPathTray && typeof callPathTray.refresh === 'function') {
+                callPathTray.refresh();
+            }
+            if (callGraphTab && typeof callGraphTab.refreshUi === 'function') {
+                callGraphTab.refreshUi();
+            }
+            if (summaryPopover
+                && typeof summaryPopover.getCurrentRecord === 'function'
+                && typeof summaryPopover.show === 'function'
+                && (typeof summaryPopover.isVisible !== 'function' || summaryPopover.isVisible())) {
+                const currentRecord = summaryPopover.getCurrentRecord();
+                if (currentRecord) {
+                    summaryPopover.show(currentRecord, { x: 80, y: 80 }, { preservePosition: true });
+                }
+            }
+            renderHtmlNodeCards();
+            renderLLMModelMenu();
+        });
+    }
     vscode.postMessage({ command: 'listLLMModels' });
     vscode.postMessage({ command: 'requestSummaryUiConfig' });
+    vscode.postMessage({ command: 'requestUiLanguage' });
 
     const classCardMemberMenu = document.getElementById('class-card-member-menu');
     classCardMemberMenu?.addEventListener('click', function (event) {
@@ -2505,6 +2539,17 @@
             selectedLLMModelName = String(data.selectedModelName || '');
             renderLLMModelMenu();
             positionLLMModelMenu();
+            return;
+        }
+
+        if (data.command === 'uiLanguageChanged') {
+            if (i18nModule && typeof i18nModule.setLanguage === 'function') {
+                i18nModule.setLanguage(data.resolvedLanguage || 'en');
+            }
+            log('state', 'info', 'UI language changed', {
+                configuredLanguage: data.configuredLanguage || null,
+                resolvedLanguage: data.resolvedLanguage || null
+            });
             return;
         }
 

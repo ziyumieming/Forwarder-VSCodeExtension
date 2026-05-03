@@ -19,7 +19,8 @@
     function labelFromId(nodeId) {
         var id = String(nodeId || '').trim();
         if (!id) {
-            return 'Unknown function';
+            var i18n = modules.I18n;
+            return i18n && typeof i18n.t === 'function' ? i18n.t('pathTray.unknownFunction') : 'Unknown function';
         }
 
         var hashParts = id.split('#').filter(function (part) {

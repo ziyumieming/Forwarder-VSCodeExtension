@@ -35,6 +35,7 @@ export class AnalysisViewProvider implements vscode.WebviewViewProvider {
         const uiScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'ui.js'));
         const moduleLoggerScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'logger.js'));
         const modulePluginManagerScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'plugin-manager.js'));
+        const moduleI18nScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'i18n.js'));
         const moduleCardMarkupScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'card-markup.js'));
         const moduleCenterStateScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'center-state.js'));
         const moduleTabManagerScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'develop', 'js', 'modules', 'tab-manager.js'));
@@ -72,6 +73,7 @@ export class AnalysisViewProvider implements vscode.WebviewViewProvider {
                 .replace(/{{uiScriptUri}}/g, uiScriptUri.toString())
                 .replace(/{{moduleLoggerScriptUri}}/g, moduleLoggerScriptUri.toString())
                 .replace(/{{modulePluginManagerScriptUri}}/g, modulePluginManagerScriptUri.toString())
+                .replace(/{{moduleI18nScriptUri}}/g, moduleI18nScriptUri.toString())
                 .replace(/{{moduleCardMarkupScriptUri}}/g, moduleCardMarkupScriptUri.toString())
                 .replace(/{{moduleCenterStateScriptUri}}/g, moduleCenterStateScriptUri.toString())
                 .replace(/{{moduleTabManagerScriptUri}}/g, moduleTabManagerScriptUri.toString())

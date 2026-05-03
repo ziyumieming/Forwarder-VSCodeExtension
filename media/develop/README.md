@@ -34,7 +34,7 @@ The Webview frontend keeps non-ESM script loading and now uses a tab shell aroun
 
 1. cytoscape library scripts
 2. base scripts: style.js -> event.js -> ui.js
-3. shared state modules: center-state.js -> tab-manager.js -> selection-store.js -> call-path-tray.js
+3. shared state modules: i18n.js -> center-state.js -> tab-manager.js -> selection-store.js -> call-path-tray.js
 4. query/render/layout/card modules under media/develop/js/modules
 5. tab modules such as relation-graph-tab.js
 6. main.js bootstrap
@@ -45,6 +45,7 @@ The injection mapping is defined in src/providers/AnalysisView.ts and consumed b
 
 - modules/logger.js: debug-level routing and structured logs
 - modules/plugin-manager.js: html-node plugin detection and dynamic load
+- modules/i18n.js: centralized UI dictionaries, language switching, and `data-i18n` DOM application
 - modules/card-markup.js: class-card HTML builders
 - modules/center-state.js: center-node state + version tracking
 - modules/tab-manager.js: tab registration, activation, toolbar visibility, active tab lifecycle
@@ -117,6 +118,14 @@ Queries return immediately after the backend snapshot is loaded. If the analysis
 - `summary-store.js` keeps per-node model and history records for the current Webview session and supports model/history switching controls in the popover.
 - Center class-card summaries are only shown when hovering the card title/header action area. Member rows keep their existing reveal/path interactions.
 - `path-summary-panel` is present as a future display target for call path summaries; it is not populated by the first-version function summary command.
+
+## UI Localization
+
+- `forwarder.ui.language` controls Webview UI language. `auto` follows the VS Code display language; Chinese locales resolve to `zh-CN`, all other locales resolve to `en`.
+- Static Webview labels use `data-i18n`, `data-i18n-title`, `data-i18n-aria-label`, or `data-i18n-placeholder`. Dynamic frontend modules use `window.AnalysisModules.I18n.t(key, params)`.
+- New user-visible frontend text must be added to `media/develop/js/modules/i18n.js`; protocol fields, request modes, cache statuses, and diagnostic logs remain untranslated.
+- VS Code contribution strings are backed by `package.nls.json` and `package.nls.zh-cn.json`.
+- UI language does not change LLM prompt language or generated summary language.
 
 ## Consistency Guardrails
 

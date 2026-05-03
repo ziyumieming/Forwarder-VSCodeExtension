@@ -8,10 +8,15 @@
 
     function noop() { }
 
+    function translate(key, params) {
+        var i18n = modules.I18n;
+        return i18n && typeof i18n.t === 'function' ? i18n.t(key, params) : String(key || '');
+    }
+
     function labelFromId(nodeId) {
         var id = String(nodeId || '').trim();
         if (!id) {
-            return 'Unknown function';
+            return translate('pathTray.unknownFunction');
         }
 
         var hashParts = id.split('#').filter(function (part) {
@@ -28,6 +33,10 @@
             : function () { return null; };
         var onQueryPath = typeof safeContext.onQueryPath === 'function' ? safeContext.onQueryPath : noop;
         var onSetCenter = typeof safeContext.onSetCenter === 'function' ? safeContext.onSetCenter : noop;
+        var i18n = safeContext.i18n || modules.I18n || null;
+        var t = function (key, params) {
+            return i18n && typeof i18n.t === 'function' ? i18n.t(key, params) : translate(key, params);
+        };
         var isPathSummaryOpen = typeof safeContext.isPathSummaryOpen === 'function'
             ? safeContext.isPathSummaryOpen
             : function () { return false; };
@@ -153,7 +162,7 @@
                 removeButton.type = 'button';
                 removeButton.className = 'call-path-chip-remove';
                 removeButton.dataset.slotRemoveIndex = String(index);
-                removeButton.setAttribute('aria-label', 'Remove ' + (slot.label || slot.id));
+                removeButton.setAttribute('aria-label', t('pathTray.removeFunction', { label: slot.label || slot.id }));
                 removeButton.textContent = 'x';
                 chip.appendChild(removeButton);
 
@@ -208,23 +217,26 @@
             }
             if (refs.pathHint) {
                 refs.pathHint.textContent = functions.length > 0
-                    ? functions.length + ' waypoint' + (functions.length === 1 ? '' : 's') + ' selected. Drag to reorder.'
-                    : 'Add functions to define waypoint order.';
+                    ? t('pathTray.selectedHint', {
+                        count: functions.length,
+                        waypointWord: t(functions.length === 1 ? 'pathTray.waypoint' : 'pathTray.waypoints')
+                    })
+                    : t('pathTray.emptyHint');
             }
             if (refs.pathQuery) {
                 var summaryOpen = isPathSummaryOpen();
                 refs.pathQuery.disabled = functions.length < 2 || summaryOpen;
                 refs.pathQuery.title = summaryOpen
-                    ? 'Close the current path summary before starting another query'
+                    ? t('pathTray.closeSummaryFirst')
                     : functions.length < 2
-                    ? 'Add at least two functions to query a call path'
-                    : 'Query call path for ordered waypoints';
+                    ? t('pathTray.needTwo')
+                    : t('pathTray.queryOrdered');
             }
             if (refs.clear) {
                 refs.clear.disabled = functions.length === 0;
                 refs.clear.title = functions.length === 0
-                    ? 'No functions to clear'
-                    : 'Clear path order';
+                    ? t('pathTray.clearDisabled')
+                    : t('pathTray.clear');
             }
 
             renderChips(functions);

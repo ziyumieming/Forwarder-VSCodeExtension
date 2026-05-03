@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { AnalysisViewProvider } from '../providers/AnalysisView';
 import { AnalysisRuntime } from '../services/AnalysisRuntime';
 import { SummaryCacheMissError } from '../services/SummaryArrangeServices';
+import { UiLanguageService } from '../services/UiLanguageServices';
 import { logger } from '../utils/logger';
 
 export class AnalysisController {
@@ -28,6 +29,9 @@ export class AnalysisController {
             if (event.affectsConfiguration('forwarder.llm.longPressMs') ||
                 event.affectsConfiguration('forwarder.llm.summaryHoverDelayMs')) {
                 this.postSummaryUiConfig();
+            }
+            if (event.affectsConfiguration('forwarder.ui.language')) {
+                this.postUiLanguageConfig();
             }
         });
     }
@@ -246,6 +250,11 @@ export class AnalysisController {
                 break;
             }
 
+            case 'requestUiLanguage': {
+                this.postUiLanguageConfig();
+                break;
+            }
+
             default:
                 logger.info(`[AnalysisController] unknown webview command: ${data.command}`);
                 break;
@@ -269,6 +278,15 @@ export class AnalysisController {
             command: 'summaryUiConfigChanged',
             hoverDelayMs: this.normalizeMs(configuration.get('summaryHoverDelayMs', 1000), 1000, 0, 5000),
             longPressMs: this.normalizeMs(configuration.get('longPressMs', 650), 650, 250, 2000)
+        });
+    }
+
+    private postUiLanguageConfig(): void {
+        const configuredValue = vscode.workspace.getConfiguration('forwarder.ui').get('language', 'auto');
+        const resolution = UiLanguageService.resolveLanguage(configuredValue, vscode.env.language);
+        this.provider.postMessage({
+            command: 'uiLanguageChanged',
+            ...resolution
         });
     }
 

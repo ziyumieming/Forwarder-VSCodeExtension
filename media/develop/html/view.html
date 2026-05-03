@@ -7,101 +7,110 @@
     <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; img-src {{cspSource}} data:; style-src {{cspSource}}; script-src 'nonce-{{nonce}}';" />
     <link rel="stylesheet" href="{{styleUri}}" />
-    <title>Forwarder Analysis</title>
+    <title data-i18n="app.title">Forwarder Analysis</title>
 </head>
 
 <body>
     <div class="background-glow" aria-hidden="true"></div>
 
     <nav class="top-nav">
-        <div id="llm-model-trigger" class="left model-trigger" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" title="Select summary model">
+        <div id="llm-model-trigger" class="left model-trigger" role="button" tabindex="0" aria-haspopup="menu"
+            aria-expanded="false" title="Select summary model" data-i18n-title="model.selectSummaryModel">
             <span class="brand-dot"></span>
-            <span class="brand">Forwarder Analysis</span>
-            <div id="llm-model-menu" class="llm-model-menu" hidden role="menu" aria-label="Summary Model"></div>
+            <span class="brand" data-i18n="app.title">Forwarder Analysis</span>
+            <div id="llm-model-menu" class="llm-model-menu" hidden role="menu" aria-label="Summary Model"
+                data-i18n-aria-label="model.summaryModel"></div>
         </div>
-        <div class="tab-strip" role="tablist" aria-label="Analysis Views">
+        <div class="tab-strip" role="tablist" aria-label="Analysis Views" data-i18n-aria-label="tabs.analysisViews">
             <button class="tab-btn is-active" type="button" role="tab" aria-selected="true"
-                data-analysis-tab="relationGraph">Class Graph</button>
+                data-analysis-tab="relationGraph" data-i18n="tabs.classGraph">Class Graph</button>
             <button class="tab-btn" type="button" role="tab" aria-selected="false" tabindex="-1"
-                data-analysis-tab="callGraph">Call Graph</button>
+                data-analysis-tab="callGraph" data-i18n="tabs.callGraph">Call Graph</button>
         </div>
         <div class="tab-toolbar is-active" data-tab-toolbar="relationGraph">
-            <div class="query-options relation-options" aria-label="Relation Options">
-                <span class="option-title">Relations</span>
+            <div class="query-options relation-options" aria-label="Relation Options"
+                data-i18n-aria-label="toolbar.relationOptions">
+                <span class="option-title" data-i18n="toolbar.relations">Relations</span>
                 <label class="option-item" for="rel-extends">
                     <input id="rel-extends" type="checkbox" checked />
-                    <span>Extends</span>
+                    <span data-i18n="toolbar.extends">Extends</span>
                 </label>
                 <label class="option-item" for="rel-implements">
                     <input id="rel-implements" type="checkbox" checked />
-                    <span>Implements</span>
+                    <span data-i18n="toolbar.implements">Implements</span>
                 </label>
                 <label class="option-item" for="rel-composition">
                     <input id="rel-composes" type="checkbox" checked />
-                    <span>Composes</span>
+                    <span data-i18n="toolbar.composes">Composes</span>
                 </label>
                 <label class="option-item" for="rel-dependency">
                     <input id="rel-dependency" type="checkbox" checked />
-                    <span>Dependencies</span>
+                    <span data-i18n="toolbar.dependencies">Dependencies</span>
                 </label>
                 <label class="option-item" for="rel-aggregates">
                     <input id="rel-aggregates" type="checkbox" checked />
-                    <span>Aggregates</span>
+                    <span data-i18n="toolbar.aggregates">Aggregates</span>
                 </label>
             </div>
-            <div class="query-options scope-options" aria-label="Workspace Scope Options">
-                <span class="option-title">Scope</span>
+            <div class="query-options scope-options" aria-label="Workspace Scope Options"
+                data-i18n-aria-label="toolbar.workspaceScopeOptions">
+                <span class="option-title" data-i18n="toolbar.scope">Scope</span>
                 <label class="option-item" for="include-external">
                     <input id="include-external" type="checkbox" />
-                    <span>Include External Files</span>
+                    <span data-i18n="toolbar.includeExternalFiles">Include External Files</span>
                 </label>
             </div>
             <div class="center controls">
-                <button id="btn-fit" class="nav-btn">Fit</button>
-                <button id="btn-layout" class="nav-btn">Layout</button>
-                <button id="btn-reset" class="nav-btn">Reset</button>
+                <button id="btn-fit" class="nav-btn" data-i18n="toolbar.fit">Fit</button>
+                <button id="btn-layout" class="nav-btn" data-i18n="toolbar.layout">Layout</button>
+                <button id="btn-reset" class="nav-btn" data-i18n="toolbar.reset">Reset</button>
             </div>
             <div class="right controls">
-                <button id="btn-query" class="nav-btn nav-btn-primary">Query</button>
+                <button id="btn-query" class="nav-btn nav-btn-primary" data-i18n="toolbar.query">Query</button>
             </div>
         </div>
         <div class="tab-toolbar call-graph-toolbar" data-tab-toolbar="callGraph" hidden>
-            <div class="query-options call-options" aria-label="Call Graph Options">
-                <span class="option-title">Call</span>
+            <div class="query-options call-options" aria-label="Call Graph Options" data-i18n-aria-label="call.options">
+                <span class="option-title" data-i18n="call.call">Call</span>
                 <label class="option-item compact-option" for="call-depth">
-                    <span>Depth</span>
-                    <select id="call-depth" class="nav-select" aria-label="Call graph depth">
-                    <option value="1">1</option>
-                    <option value="2" selected>2</option>
-                    <option value="3">3</option>
-                    <option value="4">4</option>
-                    <option value="5">5</option>
+                    <span data-i18n="call.depth">Depth</span>
+                    <select id="call-depth" class="nav-select" aria-label="Call graph depth"
+                        data-i18n-aria-label="call.depthAria">
+                        <option value="1">1</option>
+                        <option value="2" selected>2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
                     </select>
                 </label>
                 <label class="option-item compact-option" for="call-direction">
-                    <span>Direction</span>
-                    <select id="call-direction" class="nav-select nav-select-wide" aria-label="Call graph direction">
-                    <option value="both" selected>Both</option>
-                    <option value="outgoing">Outgoing</option>
-                    <option value="incoming">Incoming</option>
+                    <span data-i18n="call.direction">Direction</span>
+                    <select id="call-direction" class="nav-select nav-select-wide" aria-label="Call graph direction"
+                        data-i18n-aria-label="call.directionAria">
+                        <option value="both" selected data-i18n="call.direction.both">Both</option>
+                        <option value="outgoing" data-i18n="call.direction.outgoing">Outgoing</option>
+                        <option value="incoming" data-i18n="call.direction.incoming">Incoming</option>
                     </select>
                 </label>
             </div>
-            <div class="query-options call-scope-options" aria-label="Call Graph Scope">
-                <span class="option-title">Scope</span>
+            <div class="query-options call-scope-options" aria-label="Call Graph Scope"
+                data-i18n-aria-label="call.scope">
+                <span class="option-title" data-i18n="toolbar.scope">Scope</span>
                 <label class="option-item" for="call-include-external">
                     <input id="call-include-external" type="checkbox" />
-                    <span>Include External</span>
+                    <span data-i18n="toolbar.includeExternal">Include External</span>
                 </label>
             </div>
             <div class="center controls">
-                <button id="btn-call-fit" class="nav-btn">Fit</button>
-                <button id="btn-call-layout" class="nav-btn">Layout</button>
-                <button id="btn-call-clear" class="nav-btn">Clear</button>
+                <button id="btn-call-fit" class="nav-btn" data-i18n="toolbar.fit">Fit</button>
+                <button id="btn-call-layout" class="nav-btn" data-i18n="toolbar.layout">Layout</button>
+                <button id="btn-call-clear" class="nav-btn" data-i18n="toolbar.clear">Clear</button>
             </div>
             <div class="right controls">
-                <span id="call-center-pill" class="call-center-pill" title="No center">No center</span>
-                <button id="btn-call-query" class="nav-btn nav-btn-primary" disabled>Query</button>
+                <span id="call-center-pill" class="call-center-pill" title="No center" data-i18n="call.noCenter"
+                    data-i18n-title="call.noCenter">No center</span>
+                <button id="btn-call-query" class="nav-btn nav-btn-primary" disabled
+                    data-i18n="toolbar.query">Query</button>
             </div>
         </div>
     </nav>
@@ -109,45 +118,64 @@
     <main class="canvas-wrap">
         <div id="cy" aria-label="Cytoscape Canvas"></div>
         <div id="analysis-index-status" class="analysis-index-status" hidden>
-            <span id="analysis-index-status-text">Index updating; graph may be stale.</span>
-            <button id="btn-analysis-index-requery" class="nav-btn analysis-index-requery" type="button">Re-query</button>
+            <span id="analysis-index-status-text" data-i18n="index.stale">Index updating; graph may be stale.</span>
+            <button id="btn-analysis-index-requery" class="nav-btn analysis-index-requery" type="button"
+                data-i18n="index.requery">Re-query</button>
         </div>
         <div id="call-empty-overlay" class="call-empty-overlay" hidden>
             <div class="call-empty-panel">
-                <div class="call-empty-title">Select a function to inspect calls</div>
-                <div id="call-empty-text" class="call-empty-text">Move the editor cursor into a function, or choose a function node as the center.</div>
-                <button id="btn-call-use-cursor-center" class="nav-btn nav-btn-primary" type="button" disabled>Use Cursor as Center</button>
+                <div class="call-empty-title" data-i18n="call.empty.title">Select a function to inspect calls</div>
+                <div id="call-empty-text" class="call-empty-text" data-i18n="call.empty.text">Move the editor cursor
+                    into a function, or choose a function node as the center.</div>
+                <button id="btn-call-use-cursor-center" class="nav-btn nav-btn-primary" type="button" disabled
+                    data-i18n="call.empty.useCursorCenter">Use Cursor as Center</button>
             </div>
         </div>
-        <div id="call-context-menu" class="call-context-menu" hidden role="menu" aria-label="Call graph node actions">
-            <button type="button" data-call-action="reveal">Go to Source</button>
-            <button type="button" data-call-action="add">Add to Path Slot</button>
-            <button type="button" data-call-action="center">Set as Center</button>
+        <div id="call-context-menu" class="call-context-menu" hidden role="menu" aria-label="Call graph node actions"
+            data-i18n-aria-label="call.contextMenu.aria">
+            <button type="button" data-call-action="reveal" data-i18n="call.contextMenu.reveal">Go to Source</button>
+            <button type="button" data-call-action="add" data-i18n="call.contextMenu.add">Add to Path Slot</button>
+            <button type="button" data-call-action="center" data-i18n="call.contextMenu.setAsCenter">Set as
+                Center</button>
         </div>
-        <section id="call-path-tray" class="call-path-tray" hidden aria-label="Call Path Slots">
+        <section id="call-path-tray" class="call-path-tray" hidden aria-label="Call Path Slots"
+            data-i18n-aria-label="pathTray.aria">
             <div class="call-tray-header">
-                <span class="call-tray-title">Path Order</span>
-                <span id="call-path-hint" class="call-tray-hint">Add functions to define waypoint order.</span>
-                <button id="btn-call-tray-clear" class="nav-btn call-path-icon-btn" type="button" title="Clear path order" aria-label="Clear path order">🗑</button>
-                <button id="btn-call-tray-path-query" class="nav-btn call-path-query-btn" type="button" disabled>Path</button>
+                <span class="call-tray-title" data-i18n="pathTray.title">Path Order</span>
+                <span id="call-path-hint" class="call-tray-hint" data-i18n="pathTray.emptyHint">Add functions to define
+                    waypoint order.</span>
+                <button id="btn-call-tray-clear" class="nav-btn call-path-query-btn" type="button"
+                    title="Clear path order" aria-label="Clear path order" data-i18n="toolbar.clear"
+                    data-i18n-title="pathTray.clear" data-i18n-aria-label="pathTray.clear">Clear</button>
+                <button id="btn-call-tray-path-query" class="nav-btn call-path-query-btn" type="button" disabled
+                    data-i18n="pathTray.path">Path</button>
             </div>
-            <div id="call-path-chip-list" class="call-path-chip-list" aria-label="Ordered function path"></div>
+            <div id="call-path-chip-list" class="call-path-chip-list" aria-label="Ordered function path"
+                data-i18n-aria-label="pathTray.orderedFunctions"></div>
         </section>
-        <section id="path-summary-panel" class="path-summary-panel" hidden aria-label="Call Path Summary">
-            <div id="path-summary-resize-handle" class="path-summary-resize-handle" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
+        <section id="path-summary-panel" class="path-summary-panel" hidden aria-label="Call Path Summary"
+            data-i18n-aria-label="pathSummary.aria">
+            <div id="path-summary-resize-handle" class="path-summary-resize-handle" role="separator"
+                aria-orientation="horizontal" title="Drag to resize" data-i18n-title="pathSummary.resize"></div>
             <div class="path-summary-header">
-                <span class="path-summary-title">Path Summary</span>
-                <button id="btn-path-summary-close" class="nav-btn call-path-icon-btn" type="button" aria-label="Close path summary">x</button>
+                <span class="path-summary-title" data-i18n="pathSummary.title">Path Summary</span>
+                <button id="btn-path-summary-close" class="nav-btn call-path-icon-btn" type="button"
+                    aria-label="Close path summary" data-i18n-aria-label="pathSummary.close">x</button>
             </div>
             <div id="path-summary-content" class="path-summary-content"></div>
         </section>
-        <div id="call-path-chip-menu" class="call-context-menu" hidden role="menu" aria-label="Call path chip actions">
-            <button type="button" data-path-chip-action="center">Set as Center</button>
-            <button type="button" data-path-chip-action="remove">Remove</button>
+        <div id="call-path-chip-menu" class="call-context-menu" hidden role="menu" aria-label="Call path chip actions"
+            data-i18n-aria-label="pathChipMenu.aria">
+            <button type="button" data-path-chip-action="center" data-i18n="call.contextMenu.setAsCenter">Set as
+                Center</button>
+            <button type="button" data-path-chip-action="remove" data-i18n="pathChipMenu.remove">Remove</button>
         </div>
-        <div id="class-card-member-menu" class="call-context-menu" hidden role="menu" aria-label="Class card member actions">
-            <button type="button" data-class-member-action="reveal">Go to Source</button>
-            <button type="button" data-class-member-action="add-path">Add to Path Slot</button>
+        <div id="class-card-member-menu" class="call-context-menu" hidden role="menu"
+            aria-label="Class card member actions" data-i18n-aria-label="classMemberMenu.aria">
+            <button type="button" data-class-member-action="reveal" data-i18n="call.contextMenu.reveal">Go to
+                Source</button>
+            <button type="button" data-class-member-action="add-path" data-i18n="call.contextMenu.add">Add to Path
+                Slot</button>
         </div>
     </main>
 
@@ -158,6 +186,7 @@
     <script nonce="{{nonce}}" src="{{uiScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleLoggerScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{modulePluginManagerScriptUri}}"></script>
+    <script nonce="{{nonce}}" src="{{moduleI18nScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleCardMarkupScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleCenterStateScriptUri}}"></script>
     <script nonce="{{nonce}}" src="{{moduleTabManagerScriptUri}}"></script>
