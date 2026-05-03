@@ -2582,6 +2582,7 @@
                     nodeId: data.nodeId,
                     label: data.label,
                     summary: data.summary,
+                    summaryLanguage: data.summaryLanguage,
                     modelName: data.modelName,
                     modelId: data.modelId,
                     generatedAt: data.generatedAt,

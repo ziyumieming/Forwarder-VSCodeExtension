@@ -50,6 +50,7 @@ export interface FunctionSummaryData {
     nodeId: string;
     label: string;
     summary: string;
+    summaryLanguage?: 'en' | 'zh-CN';
     modelId?: string;
     modelName?: string;
     generatedAt: string;
@@ -110,6 +111,7 @@ export interface CallPathSummaryContext {
 export interface CallPathSummaryResult {
     requestId: string;
     summary: string;
+    summaryLanguage?: 'en' | 'zh-CN';
     generatedAt: string;
     modelName?: string;
     modelId?: string;

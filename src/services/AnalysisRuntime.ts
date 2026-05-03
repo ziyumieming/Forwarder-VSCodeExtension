@@ -15,6 +15,7 @@ import { SummaryQueueService } from './SummaryQueueServices';
 import { LLMModelInfo, LLMModelService } from './LLMModelServices';
 import { SummaryContextService } from './SummaryContextServices';
 import { AnalysisTask, GraphAnalysisQueueService } from './GraphQueueServices';
+import { PromptLanguageService, SummaryLanguage } from './UiLanguageServices';
 
 export class AnalysisRuntime {
     private static instance: AnalysisRuntime;
@@ -515,7 +516,8 @@ export class AnalysisRuntime {
             queueService: this.summaryQueueService,
             modelService: this.llmModelService,
             forceRefresh,
-            allowGenerate
+            allowGenerate,
+            summaryLanguage: this.getCurrentSummaryLanguage()
         });
         // logger.info(`[SummaryBackend] backend-cache-hit completed nodeId=${nodeId}, status=${result.cacheStatus}, stale=${result.stale === true}, model=${result.modelName || result.modelId || '<unknown>'}, reason=${reason}, summaryType=${typeof result.summary}, summaryLength=${String(result.summary || '').length}`);
         return result;
@@ -530,7 +532,8 @@ export class AnalysisRuntime {
             queueService: this.summaryQueueService,
             modelService: this.llmModelService,
             forceRefresh,
-            allowGenerate
+            allowGenerate,
+            summaryLanguage: this.getCurrentSummaryLanguage()
         });
         logger.info(`[SummaryBackend] class-summary-query completed nodeId=${nodeId}, status=${result.cacheStatus}, ownStale=${result.ownStale === true}, relationStale=${result.relationContextStale === true}, reason=${reason}`);
         return result;
@@ -548,6 +551,7 @@ export class AnalysisRuntime {
             nodeId,
             modelName,
             promptVersion: SummaryArrangeService.FUNCTION_PROMPT_VERSION,
+            summaryLanguage: this.getCurrentSummaryLanguage(),
             currentBodyHash: context.bodyHash
         });
     }
@@ -559,7 +563,8 @@ export class AnalysisRuntime {
             cacheService: this.summaryCacheService,
             queueService: this.summaryQueueService,
             modelService: this.llmModelService,
-            allowGenerate
+            allowGenerate,
+            summaryLanguage: this.getCurrentSummaryLanguage()
         });
     }
 
@@ -575,7 +580,8 @@ export class AnalysisRuntime {
             queueService: this.summaryQueueService,
             modelService: this.llmModelService,
             requestId,
-            waypointIds
+            waypointIds,
+            summaryLanguage: this.getCurrentSummaryLanguage()
         });
     }
 
@@ -685,6 +691,11 @@ export class AnalysisRuntime {
             throw new Error('LLM support is not initialized.');
         }
         await this.llmInitialization;
+    }
+
+    private getCurrentSummaryLanguage(): SummaryLanguage {
+        const configuredValue = vscode.workspace.getConfiguration('forwarder.ui').get('language', 'auto');
+        return PromptLanguageService.resolveSummaryLanguage(configuredValue, vscode.env.language);
     }
 
     /**

@@ -7,6 +7,7 @@ import { ClassSummaryContext, FunctionSummaryContext, RelatedClassContext, Summa
 import { SummaryJsonSchemaService } from './SummarySchemaServices';
 import { SummaryQueueService } from './SummaryQueueServices';
 import { logger } from '../utils/logger';
+import { PromptLanguageService, SummaryLanguage } from './UiLanguageServices';
 
 export interface SummaryLLMClient {
     sendPrompt(prompt: string): Promise<LLMPromptResult>;
@@ -19,6 +20,7 @@ export interface SummaryServiceOptions {
     forceRefresh?: boolean;
     allowGenerate?: boolean;
     promptVersion?: string;
+    summaryLanguage?: SummaryLanguage;
 }
 
 export interface FunctionSummaryBatchResult {
@@ -27,6 +29,7 @@ export interface FunctionSummaryBatchResult {
     invalidNodeIds: string[];
     promptVersion: string;
     modelName: string;
+    summaryLanguage: SummaryLanguage;
 }
 
 export interface FunctionSummaryDependencyResult {
@@ -81,6 +84,10 @@ export class SummaryArrangeService {
     public static readonly CALL_PATH_PROMPT_VERSION = 'call-path-summary:v1';
     private static readonly MAX_RELATION_BRIEFS = 3;
 
+    private static resolveSummaryLanguage(options: SummaryServiceOptions = {}): SummaryLanguage {
+        return PromptLanguageService.normalize(options.summaryLanguage);
+    }
+
     public static async summarizeFunction(
         graph: ProjectGraph,
         nodeId: string,
@@ -92,15 +99,17 @@ export class SummaryArrangeService {
         const selectedModel = options.modelService?.getSelectedModel();
         const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
         const modelId = selectedModel?.id;
+        const summaryLanguage = this.resolveSummaryLanguage(options);
 
         const allowGenerate = options.allowGenerate !== false;
 
-        logger.info(`[SummaryBackend] backend-cache-query nodeId=${context.nodeId}, label=${context.label}, model=${modelName}, selectedModelId=${modelId || '<fallback>'}, forceRefresh=${options.forceRefresh === true}, allowGenerate=${allowGenerate}, bodyHash=${context.bodyHash.slice(0, 12)}`);
+        logger.info(`[SummaryBackend] backend-cache-query nodeId=${context.nodeId}, label=${context.label}, language=${summaryLanguage}, model=${modelName}, selectedModelId=${modelId || '<fallback>'}, forceRefresh=${options.forceRefresh === true}, allowGenerate=${allowGenerate}, bodyHash=${context.bodyHash.slice(0, 12)}`);
         if (options.cacheService && (!options.forceRefresh || !allowGenerate)) {
             const cached = await options.cacheService.lookupFunctionSummary({
                 nodeId: context.nodeId,
                 modelName,
                 promptVersion,
+                summaryLanguage,
                 currentBodyHash: context.bodyHash
             });
             if (cached) {
@@ -110,7 +119,7 @@ export class SummaryArrangeService {
         }
 
         if (!allowGenerate) {
-            logger.info(`[SummaryBackend] backend-cache-miss nodeId=${context.nodeId}, model=${modelName}, prompt=${promptVersion}, allowGenerate=false`);
+            logger.info(`[SummaryBackend] backend-cache-miss nodeId=${context.nodeId}, language=${summaryLanguage}, model=${modelName}, prompt=${promptVersion}, allowGenerate=false`);
             throw new SummaryCacheMissError(context.nodeId, modelName, promptVersion);
         }
 
@@ -118,13 +127,14 @@ export class SummaryArrangeService {
             'function',
             context.nodeId,
             modelName,
+            summaryLanguage,
             context.bodyHash,
             options.forceRefresh === true ? 'force' : 'normal'
         ].join('|');
 
         const generate = async () => {
-            logger.info(`[SummaryBackend] llm-generate-start nodeId=${context.nodeId}, model=${modelName}, selectedModelId=${modelId || '<fallback>'}, forceRefresh=${options.forceRefresh === true}`);
-            const prompt = this.buildFunctionSummaryPrompt(context);
+            logger.info(`[SummaryBackend] llm-generate-start nodeId=${context.nodeId}, language=${summaryLanguage}, model=${modelName}, selectedModelId=${modelId || '<fallback>'}, forceRefresh=${options.forceRefresh === true}`);
+            const prompt = this.buildFunctionSummaryPrompt(context, summaryLanguage);
             const response = selectedModel?.model
                 ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
                 : await llmClient.sendPrompt(prompt);
@@ -139,6 +149,7 @@ export class SummaryArrangeService {
                 nodeId: context.nodeId,
                 label: context.label,
                 summary: summaryText,
+                summaryLanguage,
                 modelName,
                 modelId: response.modelId || modelId,
                 generatedAt: new Date().toISOString(),
@@ -154,6 +165,7 @@ export class SummaryArrangeService {
                     modelName,
                     modelId: generated.modelId,
                     promptVersion,
+                    summaryLanguage,
                     bodyHash: context.bodyHash
                 });
                 logger.info(`[SummaryBackend] llm-generate-done nodeId=${context.nodeId}, model=${modelName}, status=${stored.cacheStatus}, history=${stored.historyCount || 1}`);
@@ -180,6 +192,7 @@ export class SummaryArrangeService {
         const selectedModel = options.modelService?.getSelectedModel();
         const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
         const modelId = selectedModel?.id;
+        const summaryLanguage = this.resolveSummaryLanguage(options);
         const batchNodeIds = context.functions.map(fn => fn.nodeId);
         const excludedNodeIds = nodeIds.filter(nodeId => !batchNodeIds.includes(nodeId));
 
@@ -189,7 +202,8 @@ export class SummaryArrangeService {
                 missingNodeIds: Array.from(new Set(nodeIds)),
                 invalidNodeIds: [],
                 promptVersion,
-                modelName
+                modelName,
+                summaryLanguage
             };
         }
 
@@ -197,12 +211,13 @@ export class SummaryArrangeService {
             'function-batch',
             batchNodeIds.slice().sort().join(','),
             modelName,
+            summaryLanguage,
             context.functions.map(fn => fn.bodyHash).sort().join(','),
             promptVersion
         ].join('|');
 
         const generate = async (): Promise<FunctionSummaryBatchResult> => {
-            const prompt = this.buildFunctionBatchSummaryPrompt(context);
+            const prompt = this.buildFunctionBatchSummaryPrompt(context, summaryLanguage);
             const response = selectedModel?.model
                 ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
                 : await llmClient.sendPrompt(prompt);
@@ -224,6 +239,7 @@ export class SummaryArrangeService {
                     nodeId: fnContext.nodeId,
                     label: fnContext.label,
                     summary: item.summary,
+                    summaryLanguage,
                     modelName,
                     modelId: response.modelId || modelId,
                     generatedAt,
@@ -238,6 +254,7 @@ export class SummaryArrangeService {
                         modelName,
                         modelId: summary.modelId,
                         promptVersion,
+                        summaryLanguage,
                         bodyHash: fnContext.bodyHash
                     })
                     : summary);
@@ -252,7 +269,8 @@ export class SummaryArrangeService {
                 missingNodeIds: Array.from(new Set([...excludedNodeIds, ...parsed.missingNodeIds])),
                 invalidNodeIds: parsed.invalidNodeIds,
                 promptVersion,
-                modelName
+                modelName,
+                summaryLanguage
             };
         };
 
@@ -269,6 +287,7 @@ export class SummaryArrangeService {
     ): Promise<FunctionSummaryDependencyResult> {
         const selectedModel = options.modelService?.getSelectedModel();
         const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
+        const summaryLanguage = this.resolveSummaryLanguage(options);
         const contexts = await Promise.all(Array.from(new Set(nodeIds)).map(async nodeId => {
             try {
                 return await SummaryContextService.buildFunctionContext(graph, nodeId);
@@ -287,6 +306,7 @@ export class SummaryArrangeService {
                 nodeId: context.nodeId,
                 modelName,
                 promptVersion: this.FUNCTION_BATCH_PROMPT_VERSION,
+                summaryLanguage,
                 fallbackPromptVersions: [this.FUNCTION_PROMPT_VERSION],
                 currentBodyHash: context.bodyHash
             })));
@@ -353,6 +373,7 @@ export class SummaryArrangeService {
         const selectedModel = options.modelService?.getSelectedModel();
         const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
         const modelId = selectedModel?.id;
+        const summaryLanguage = this.resolveSummaryLanguage(options);
         const context = await SummaryContextService.buildClassContext(graph, nodeId);
         const promptVersion = options.promptVersion || this.CLASS_RELATION_BRIEF_PROMPT_VERSION;
 
@@ -362,6 +383,7 @@ export class SummaryArrangeService {
                 targetKind: 'class',
                 modelName,
                 promptVersion,
+                summaryLanguage,
                 currentBodyHash: context.ownContextHash,
                 currentRelationContextHash: context.relationContextHash
             });
@@ -375,7 +397,7 @@ export class SummaryArrangeService {
         }
 
         const generate = async (): Promise<ClassSummaryData> => {
-            const prompt = this.buildClassRelationBriefPrompt(context);
+            const prompt = this.buildClassRelationBriefPrompt(context, summaryLanguage);
             const response = selectedModel?.model
                 ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
                 : await llmClient.sendPrompt(prompt);
@@ -387,6 +409,7 @@ export class SummaryArrangeService {
                 nodeId,
                 label: context.label,
                 summary: summaryText,
+                summaryLanguage,
                 modelName,
                 modelId: response.modelId || modelId,
                 generatedAt: new Date().toISOString(),
@@ -406,12 +429,13 @@ export class SummaryArrangeService {
                     ...generated,
                     modelName,
                     promptVersion,
+                    summaryLanguage,
                     bodyHash: context.ownContextHash
                 }) as ClassSummaryData
                 : generated;
         };
 
-        const queueKey = ['class-brief', nodeId, modelName, context.ownContextHash, context.relationContextHash, promptVersion].join('|');
+        const queueKey = ['class-brief', nodeId, modelName, summaryLanguage, context.ownContextHash, context.relationContextHash, promptVersion].join('|');
         return options.queueService ? options.queueService.enqueue(queueKey, generate) : generate();
     }
 
@@ -424,6 +448,7 @@ export class SummaryArrangeService {
         const selectedModel = options.modelService?.getSelectedModel();
         const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
         const modelId = selectedModel?.id;
+        const summaryLanguage = this.resolveSummaryLanguage(options);
         const baseContext = await SummaryContextService.buildClassContext(graph, nodeId);
         const methodSummaries = await this.ensureFreshFunctionSummariesForDependencies(
             graph,
@@ -446,6 +471,7 @@ export class SummaryArrangeService {
                 targetKind: 'class',
                 modelName,
                 promptVersion,
+                summaryLanguage,
                 currentBodyHash: context.ownContextHash,
                 currentRelationContextHash: context.relationContextHash
             });
@@ -459,7 +485,7 @@ export class SummaryArrangeService {
         }
 
         const generate = async (): Promise<ClassSummaryData> => {
-            const prompt = this.buildClassSummaryPrompt(context);
+            const prompt = this.buildClassSummaryPrompt(context, summaryLanguage);
             const response = selectedModel?.model
                 ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
                 : await llmClient.sendPrompt(prompt);
@@ -477,6 +503,7 @@ export class SummaryArrangeService {
                 nodeId,
                 label: context.label,
                 summary: summaryText,
+                summaryLanguage,
                 modelName,
                 modelId: response.modelId || modelId,
                 generatedAt: new Date().toISOString(),
@@ -496,13 +523,14 @@ export class SummaryArrangeService {
                     ...generated,
                     modelName,
                     promptVersion,
+                    summaryLanguage,
                     bodyHash: context.ownContextHash,
                     relationContextHash: context.relationContextHash
                 }) as ClassSummaryData
                 : generated;
         };
 
-        const queueKey = ['class-summary', nodeId, modelName, context.ownContextHash, context.relationContextHash, promptVersion].join('|');
+        const queueKey = ['class-summary', nodeId, modelName, summaryLanguage, context.ownContextHash, context.relationContextHash, promptVersion].join('|');
         return options.queueService ? options.queueService.enqueue(queueKey, generate) : generate();
     }
 
@@ -516,7 +544,8 @@ export class SummaryArrangeService {
         const selectedModel = options.modelService?.getSelectedModel();
         const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
         const modelId = selectedModel?.id;
-        const failure = this.buildDeterministicCallPathFailure(graph, graphData, requestId);
+        const summaryLanguage = this.resolveSummaryLanguage(options);
+        const failure = this.buildDeterministicCallPathFailure(graph, graphData, requestId, summaryLanguage);
         if (failure) {
             return failure;
         }
@@ -528,11 +557,12 @@ export class SummaryArrangeService {
             missingSummaryNodeIds: [],
             staleSummaryNodeIds: []
         });
-        const prompt = this.buildCallPathSummaryPrompt(context);
+        const prompt = this.buildCallPathSummaryPrompt(context, summaryLanguage);
         const queueKey = [
             'call-path-summary',
             pathNodeIds.join(','),
             modelName,
+            summaryLanguage,
             context.steps.map(step => summaries.get(step.nodeId)?.bodyHash || 'missing').join(','),
             graphData.meta?.direction || 'outgoing',
             graphData.meta?.depth ?? graphData.edges.length
@@ -549,6 +579,7 @@ export class SummaryArrangeService {
             return {
                 requestId,
                 summary: summaryText,
+                summaryLanguage,
                 generatedAt: new Date().toISOString(),
                 modelName,
                 modelId: response.modelId || modelId,
@@ -560,32 +591,40 @@ export class SummaryArrangeService {
         return options.queueService ? options.queueService.enqueue(queueKey, generate) : generate();
     }
 
-    public static buildFunctionSummaryPrompt(context: FunctionSummaryContext): string {
+    public static buildFunctionSummaryPrompt(context: FunctionSummaryContext, summaryLanguage: SummaryLanguage = 'zh-CN'): string {
+        const sections = PromptLanguageService.functionSections(summaryLanguage);
         return [
-            '你是资深代码阅读助手。请根据给定函数或方法的签名和源码生成简洁 Markdown 摘要。',
+            PromptLanguageService.instruction(summaryLanguage),
+            summaryLanguage === 'en'
+                ? 'You are a senior code reading assistant. Generate a concise Markdown summary from the given function or method signature and source code.'
+                : '你是资深代码阅读助手。请根据给定函数或方法的签名和源码生成简洁 Markdown 摘要。',
             '',
-            '摘要应包含两个小节：',
-            '### 功能概述',
-            '### 关键行为',
+            summaryLanguage === 'en' ? 'The summary must contain these two sections:' : '摘要应包含两个小节：',
+            sections.overview,
+            sections.behavior,
             '',
-            '阅读方法：',
-            '- 只依据当前函数或方法的签名与源码判断它承担的职责。',
-            '- 优先概括控制流、状态变化、返回值和关键副作用，避免逐行复述。',
+            summaryLanguage === 'en' ? 'Reading guidance:' : '阅读方法：',
+            summaryLanguage === 'en'
+                ? '- Use only the current function or method signature and source code to infer its responsibility.'
+                : '- 只依据当前函数或方法的签名与源码判断它承担的职责。',
+            summaryLanguage === 'en'
+                ? '- Prefer summarizing control flow, state changes, return values, and key side effects. Avoid line-by-line narration.'
+                : '- 优先概括控制流、状态变化、返回值和关键副作用，避免逐行复述。',
             '',
-            `函数名：${context.name}`,
-            `签名：${context.signature}`,
-            context.namespace ? `命名空间：${context.namespace}` : '',
-            `文件：${context.fileName}`,
-            `语言：${context.languageId}`,
+            `${summaryLanguage === 'en' ? 'Function' : '函数名'}: ${context.name}`,
+            `${summaryLanguage === 'en' ? 'Signature' : '签名'}: ${context.signature}`,
+            context.namespace ? `${summaryLanguage === 'en' ? 'Namespace' : '命名空间'}: ${context.namespace}` : '',
+            `${summaryLanguage === 'en' ? 'File' : '文件'}: ${context.fileName}`,
+            `${summaryLanguage === 'en' ? 'Code language' : '语言'}: ${context.languageId}`,
             '',
-            '源码：',
+            summaryLanguage === 'en' ? 'Source:' : '源码：',
             '```' + this.markdownFenceLanguage(context.languageId),
             context.sourceCode,
             '```'
         ].filter(line => line !== '').join('\n');
     }
 
-    public static buildFunctionBatchSummaryPrompt(context: Awaited<ReturnType<typeof SummaryContextService.buildFunctionBatchContext>>): string {
+    public static buildFunctionBatchSummaryPrompt(context: Awaited<ReturnType<typeof SummaryContextService.buildFunctionBatchContext>>, summaryLanguage: SummaryLanguage = 'zh-CN'): string {
         const sections = context.functions.flatMap(fn => [
             `FUNCTION_NODE_ID: ${fn.nodeId}`,
             `FUNCTION_NAME: ${fn.name}`,
@@ -598,6 +637,7 @@ export class SummaryArrangeService {
         ]);
 
         return [
+            PromptLanguageService.instruction(summaryLanguage),
             'You are a senior code reading assistant. Generate concise Markdown summaries for the listed functions.',
             'Return only valid JSON matching this schema:',
             SummaryJsonSchemaService.getFunctionBatchSchemaPrompt(),
@@ -606,6 +646,9 @@ export class SummaryArrangeService {
             '- Include exactly one object per function you can summarize.',
             '- Use the exact FUNCTION_NODE_ID as nodeId.',
             '- Make each summary a non-empty concise Markdown string focused on responsibility, control flow, state changes, and return value.',
+            summaryLanguage === 'en'
+                ? '- The summary value of each JSON object must be written in English.'
+                : '- 每个 JSON 对象的 summary 字段内容必须使用简体中文。',
             '- Do not add text outside JSON.',
             '',
             `File: ${context.fileName}`,
@@ -615,8 +658,9 @@ export class SummaryArrangeService {
         ].join('\n');
     }
 
-    public static buildClassRelationBriefPrompt(context: ClassSummaryContext): string {
+    public static buildClassRelationBriefPrompt(context: ClassSummaryContext, summaryLanguage: SummaryLanguage = 'zh-CN'): string {
         return [
+            PromptLanguageService.instruction(summaryLanguage),
             'Summarize this class briefly so another class summary can understand its likely collaboration role.',
             'Return 1-3 concise sentences. Do not use Markdown headings.',
             '',
@@ -642,15 +686,14 @@ export class SummaryArrangeService {
         ].filter(line => line !== '').join('\n');
     }
 
-    public static buildClassSummaryPrompt(context: ClassSummaryContext): string {
+    public static buildClassSummaryPrompt(context: ClassSummaryContext, summaryLanguage: SummaryLanguage = 'zh-CN'): string {
+        const classSections = PromptLanguageService.classSections(summaryLanguage);
         return [
+            PromptLanguageService.instruction(summaryLanguage),
             'You are a senior code reading assistant. Generate a class summary that explains the role of this class in the project.',
             '',
             'Output exactly these Markdown sections:',
-            '### 职责定位',
-            '### 核心状态',
-            '### 主要行为',
-            '### 协作关系',
+            ...classSections,
             '',
             'Evidence guidance:',
             '- Use method summaries as the primary signal for behavior and responsibility.',
@@ -679,39 +722,51 @@ export class SummaryArrangeService {
         ].filter(line => line !== '').join('\n');
     }
 
-    public static buildCallPathSummaryPrompt(context: CallPathSummaryContext): string {
+    public static buildCallPathSummaryPrompt(context: CallPathSummaryContext, summaryLanguage: SummaryLanguage = 'zh-CN'): string {
+        const callPathSections = PromptLanguageService.callPathSections(summaryLanguage);
         const waypointIds = new Set(context.waypointIds);
         const stepBlocks = context.steps.map((step, index) => {
             const nextStep = context.steps[index + 1];
             return [
-                `${step.order}. ${step.label}${waypointIds.has(step.nodeId) ? '（用户选中定位点）' : ''}`,
-                step.signature ? `   签名：${step.signature}` : '',
-                step.fileName ? `   文件：${step.fileName}` : '',
-                `   函数摘要：${step.summary}`,
+                `${step.order}. ${step.label}${waypointIds.has(step.nodeId) ? (summaryLanguage === 'en' ? ' (user-selected waypoint)' : '（用户选中定位点）') : ''}`,
+                step.signature ? `   ${summaryLanguage === 'en' ? 'Signature' : '签名'}: ${step.signature}` : '',
+                step.fileName ? `   ${summaryLanguage === 'en' ? 'File' : '文件'}: ${step.fileName}` : '',
+                `   ${summaryLanguage === 'en' ? 'Function summary' : '函数摘要'}: ${step.summary}`,
                 nextStep
-                    ? `   下一步连接到 ${nextStep.label} `
-                    : '   为链路终点'
+                    ? `   ${summaryLanguage === 'en' ? 'Next step connects to' : '下一步连接到'} ${nextStep.label} `
+                    : `   ${summaryLanguage === 'en' ? 'End of path' : '为链路终点'}`
             ].filter(Boolean).join('\n');
         });
         return [
-            '你是资深代码阅读助手。请解释下面这条函数调用链在语义上完成了什么。',
+            PromptLanguageService.instruction(summaryLanguage),
+            summaryLanguage === 'en'
+                ? 'You are a senior code reading assistant. Explain what the following function call path accomplishes semantically.'
+                : '你是资深代码阅读助手。请解释下面这条函数调用链在语义上完成了什么。',
             '',
-            '输出两个 Markdown 小节：',
-            '### 执行意图',
-            '### 路径步骤',
+            summaryLanguage === 'en' ? 'Output two Markdown sections:' : '输出两个 Markdown 小节：',
+            callPathSections.intent,
+            callPathSections.steps,
             '',
-            '阅读方法：',
-            '- 先依据每个函数摘要判断该步骤承担的业务职责、控制职责或数据处理职责。',
-            '- 再用函数签名、文件名和相邻步骤名称辅助判断控制权、数据或状态如何向下一步推进。',
-            '- 在“执行意图”中概括整条链路试图完成的动作、触发条件，以及关键数据或状态如何传递。',
-            '- 在“路径步骤”中结合函数摘要和签名按顺序解释每个函数的作用及其在链路中的作用。',
+            summaryLanguage === 'en' ? 'Reading guidance:' : '阅读方法：',
+            summaryLanguage === 'en'
+                ? '- First use each function summary to infer whether the step is responsible for business behavior, control flow, or data processing.'
+                : '- 先依据每个函数摘要判断该步骤承担的业务职责、控制职责或数据处理职责。',
+            summaryLanguage === 'en'
+                ? '- Then use signatures, file names, and neighboring step names to infer how control, data, or state moves forward.'
+                : '- 再用函数签名、文件名和相邻步骤名称辅助判断控制权、数据或状态如何向下一步推进。',
+            summaryLanguage === 'en'
+                ? '- In "Execution Intent", summarize the action, trigger conditions, and key data or state propagation.'
+                : '- 在“执行意图”中概括整条链路试图完成的动作、触发条件，以及关键数据或状态如何传递。',
+            summaryLanguage === 'en'
+                ? '- In "Path Steps", explain each function in order using its summary and signature.'
+                : '- 在“路径步骤”中结合函数摘要和签名按顺序解释每个函数的作用及其在链路中的作用。',
             '',
-            '调用链步骤：',
+            summaryLanguage === 'en' ? 'Call path steps:' : '调用链步骤：',
             ...stepBlocks
         ].filter(line => line !== '').join('\n');
     }
 
-    private static buildDeterministicCallPathFailure(graph: ProjectGraph, graphData: GraphViewData, requestId: string): CallPathSummaryResult | undefined {
+    private static buildDeterministicCallPathFailure(graph: ProjectGraph, graphData: GraphViewData, requestId: string, summaryLanguage: SummaryLanguage): CallPathSummaryResult | undefined {
         const failedSegment = graphData.meta?.segments?.find(segment => segment.pathFound === false);
         if (graphData.meta?.pathFound === true && !failedSegment) {
             return undefined;
@@ -719,16 +774,20 @@ export class SummaryArrangeService {
         const formatNode = (nodeId: string) => graph.getNode(nodeId)?.name || nodeId;
         const reason = failedSegment
             ? `Segment ${formatNode(failedSegment.sourceId)} -> ${formatNode(failedSegment.targetId)} failed${failedSegment.reason ? `: ${failedSegment.reason}` : '.'}`
-            : graphData.meta?.reason || 'No call path was found for the selected waypoints.';
+            : graphData.meta?.reason || (summaryLanguage === 'en'
+                ? 'No call path was found for the selected waypoints.'
+                : '没有找到所选途经点之间的完整调用链。');
+        const sections = PromptLanguageService.callPathSections(summaryLanguage);
         return {
             requestId,
             summary: [
-                '### 执行意图',
+                sections.intent,
                 reason,
                 '',
-                '### 路径步骤',
-                'No complete path is available.'
+                sections.steps,
+                summaryLanguage === 'en' ? 'No complete path is available.' : '没有可用的完整路径。'
             ].join('\n'),
+            summaryLanguage,
             generatedAt: new Date().toISOString(),
             deterministic: true
         };
@@ -807,6 +866,7 @@ export class SummaryArrangeService {
         const selected = relatedClasses.slice(0, this.MAX_RELATION_BRIEFS);
         const selectedModel = options.modelService?.getSelectedModel();
         const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
+        const summaryLanguage = this.resolveSummaryLanguage(options);
         for (const related of selected) {
             const relatedContext = await SummaryContextService.buildClassContext(graph, related.nodeId);
             const existing = options.cacheService
@@ -815,6 +875,7 @@ export class SummaryArrangeService {
                     targetKind: 'class',
                     modelName,
                     promptVersion: this.CLASS_RELATION_BRIEF_PROMPT_VERSION,
+                    summaryLanguage,
                     fallbackPromptVersions: [this.CLASS_PROMPT_VERSION],
                     currentBodyHash: relatedContext.ownContextHash,
                     currentRelationContextHash: relatedContext.relationContextHash

@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../utils/logger';
+import { SummaryLanguage } from './UiLanguageServices';
 
 export type SummaryTargetKind = 'function' | 'method' | 'class' | 'path';
 
@@ -13,6 +14,7 @@ export interface SummaryIndexRecord {
     modelName: string;
     modelId?: string;
     promptVersion: string;
+    summaryLanguage?: SummaryLanguage;
     bodyHash: string;
     generatedAt: string;
     relationContextHash?: string;
@@ -26,6 +28,7 @@ export interface SummaryBodyRecord {
     label: string;
     modelName: string;
     promptVersion: string;
+    summaryLanguage?: SummaryLanguage;
     bodyHash: string;
     generatedAt: string;
     summary: string;
@@ -46,6 +49,7 @@ export interface SummaryStoredRecord extends SummaryIndexRecord {
 
 export interface SummaryTargetIndexRecord {
     targetId: string;
+    summaryLanguage?: SummaryLanguage;
     bodyKey: string;
     updatedAt: string;
     recordCount: number;
@@ -81,23 +85,42 @@ export class SummaryStorageService {
 
         const raw = await fs.promises.readFile(this.indexPath, 'utf8');
         const parsed = JSON.parse(raw) as SummaryIndexFile;
-        this.targetIndex = parsed.version === 2 && Array.isArray(parsed.targets) ? parsed.targets : [];
+        this.targetIndex = (parsed.version === 2 || parsed.version === 3) && Array.isArray(parsed.targets)
+            ? parsed.targets.map(record => ({
+                ...record,
+                summaryLanguage: this.normalizeSummaryLanguage(record.summaryLanguage)
+            }))
+            : [];
         await this.cleanupOrphanBodies();
         logger.info(`[SummaryStorageService] Loaded summary index: ${this.indexPath}, targets=${this.targetIndex.length}`);
     }
 
-    public getIndexRecords(_targetKind: SummaryTargetKind, targetId: string): SummaryIndexRecord[] {
-        const body = this.readTargetBodySync(targetId);
-        return body.records.map(record => this.toIndexRecord(targetId, record));
+    public getIndexRecords(_targetKind: SummaryTargetKind, targetId: string, summaryLanguage?: SummaryLanguage): SummaryIndexRecord[] {
+        const bodies = summaryLanguage
+            ? [this.readTargetBodySync(targetId, summaryLanguage)]
+            : this.findTargets(targetId).map(target => this.readTargetBodySync(targetId, target.summaryLanguage));
+        return bodies.flatMap(body => body.records.map(record => this.toIndexRecord(targetId, record)));
     }
 
     public getAllIndexRecords(): SummaryTargetIndexRecord[] {
         return this.targetIndex.map(record => ({ ...record }));
     }
 
-    public async readTargetBody(targetId: string): Promise<SummaryTargetBody> {
+    public async readTargetBody(targetId: string, summaryLanguage?: SummaryLanguage): Promise<SummaryTargetBody> {
         this.bodyReadCount += 1;
-        const target = this.findTarget(targetId);
+        if (!summaryLanguage) {
+            const targets = this.findTargets(targetId);
+            if (targets.length === 0) {
+                return { targetId, records: [] };
+            }
+            const bodies = await Promise.all(targets.map(target => this.readIndexedTargetBody(target)));
+            return {
+                targetId,
+                records: bodies.flatMap(body => body.records)
+            };
+        }
+
+        const target = this.findTarget(targetId, summaryLanguage);
         if (!target) {
             return { targetId, records: [] };
         }
@@ -108,7 +131,7 @@ export class SummaryStorageService {
             const parsed = JSON.parse(raw);
             return {
                 targetId,
-                records: Array.isArray(parsed.records) ? parsed.records.map(this.normalizeBodyRecord) : []
+                records: Array.isArray(parsed.records) ? parsed.records.map((record: any) => this.normalizeBodyRecord(record)) : []
             };
         } catch (error: any) {
             logger.error(`[SummaryStorageService] Failed to read target summary body: target=${targetId}, path=${bodyPath}, error=${error?.message || error}`);
@@ -116,12 +139,12 @@ export class SummaryStorageService {
         }
     }
 
-    public async writeTargetBody(targetId: string, records: SummaryBodyRecord[]): Promise<void> {
-        const bodyKey = this.createBodyKey(targetId);
-        const normalizedRecords = records.map(this.normalizeBodyRecord);
+    public async writeTargetBody(targetId: string, records: SummaryBodyRecord[], summaryLanguage?: SummaryLanguage): Promise<void> {
+        const bodyKey = this.createBodyKey(targetId, summaryLanguage);
+        const normalizedRecords = records.map(record => this.normalizeBodyRecord(record));
         const bodyPath = this.bodyPath(bodyKey);
 
-        this.targetIndex = this.targetIndex.filter(record => record.targetId !== targetId);
+        this.targetIndex = this.targetIndex.filter(record => !(record.targetId === targetId && record.summaryLanguage === summaryLanguage));
         if (normalizedRecords.length > 0) {
             await fs.promises.mkdir(path.dirname(bodyPath), { recursive: true });
             await fs.promises.writeFile(bodyPath, JSON.stringify({
@@ -131,6 +154,7 @@ export class SummaryStorageService {
 
             this.targetIndex.push({
                 targetId,
+                summaryLanguage,
                 bodyKey,
                 updatedAt: new Date().toISOString(),
                 recordCount: normalizedRecords.length
@@ -142,12 +166,12 @@ export class SummaryStorageService {
     }
 
     public async writeRecord(record: SummaryStoredRecord): Promise<void> {
-        const body = await this.readTargetBody(record.targetId);
+        const body = await this.readTargetBody(record.targetId, record.summaryLanguage);
         const nextRecord = this.toBodyRecord(record);
         const nextRecords = body.records.filter(existing => existing.recordKey !== nextRecord.recordKey);
         nextRecords.push(nextRecord);
-        await this.writeTargetBody(record.targetId, nextRecords);
-        logger.info(`[SummaryStorageService] Wrote summary record: key=${record.recordKey}, target=${record.targetId}, model=${record.modelName}, index=${this.indexPath}`);
+        await this.writeTargetBody(record.targetId, nextRecords, record.summaryLanguage);
+        logger.info(`[SummaryStorageService] Wrote summary record: key=${record.recordKey}, target=${record.targetId}, language=${record.summaryLanguage || '<legacy>'}, model=${record.modelName}, index=${this.indexPath}`);
     }
 
     public async removeRecords(recordKeys: string[]): Promise<{ removedRecords: number }> {
@@ -159,7 +183,7 @@ export class SummaryStorageService {
         let removedRecords = 0;
         const targets = this.getAllIndexRecords();
         for (const target of targets) {
-            const body = await this.readTargetBody(target.targetId);
+            const body = await this.readTargetBody(target.targetId, target.summaryLanguage);
             const nextRecords = body.records.filter(record => {
                 const remove = keySet.has(record.recordKey);
                 if (remove) {
@@ -168,7 +192,7 @@ export class SummaryStorageService {
                 return !remove;
             });
             if (nextRecords.length !== body.records.length) {
-                await this.writeTargetBody(target.targetId, nextRecords);
+                await this.writeTargetBody(target.targetId, nextRecords, target.summaryLanguage);
             }
         }
 
@@ -186,20 +210,22 @@ export class SummaryStorageService {
 
         let removedRecords = 0;
         for (const targetId of Array.from(new Set(targetIds))) {
-            const target = this.findTarget(targetId);
-            if (!target) {
+            const targets = this.findTargets(targetId);
+            if (targets.length === 0) {
                 continue;
             }
 
-            removedRecords += target.recordCount;
-            const bodyPath = this.bodyPath(target.bodyKey);
-            try {
-                if (fs.existsSync(bodyPath)) {
-                    await fs.promises.unlink(bodyPath);
-                }
-            } catch (error: any) {
-                if (error?.code !== 'ENOENT') {
-                    logger.warn(`[SummaryStorageService] Failed to remove summary body: target=${targetId}, path=${bodyPath}, error=${error?.message || error}`);
+            for (const target of targets) {
+                removedRecords += target.recordCount;
+                const bodyPath = this.bodyPath(target.bodyKey);
+                try {
+                    if (fs.existsSync(bodyPath)) {
+                        await fs.promises.unlink(bodyPath);
+                    }
+                } catch (error: any) {
+                    if (error?.code !== 'ENOENT') {
+                        logger.warn(`[SummaryStorageService] Failed to remove summary body: target=${targetId}, path=${bodyPath}, error=${error?.message || error}`);
+                    }
                 }
             }
             this.targetIndex = this.targetIndex.filter(record => record.targetId !== targetId);
@@ -218,26 +244,29 @@ export class SummaryStorageService {
                 continue;
             }
 
-            const oldTarget = this.findTarget(oldTargetId);
-            if (!oldTarget) {
+            const oldTargets = this.findTargets(oldTargetId);
+            if (oldTargets.length === 0) {
                 continue;
             }
 
-            const oldBody = await this.readTargetBody(oldTargetId);
-            const newBody = await this.readTargetBody(newTargetId);
-            const recordsByKey = new Map<string, SummaryBodyRecord>();
+            for (const oldTarget of oldTargets) {
+                const oldBody = await this.readTargetBody(oldTargetId, oldTarget.summaryLanguage);
+                const newBody = await this.readTargetBody(newTargetId, oldTarget.summaryLanguage);
+                const recordsByKey = new Map<string, SummaryBodyRecord>();
 
-            for (const record of newBody.records) {
-                recordsByKey.set(record.recordKey, record);
-            }
-            for (const record of oldBody.records) {
-                if (!recordsByKey.has(record.recordKey)) {
+                for (const record of newBody.records) {
                     recordsByKey.set(record.recordKey, record);
-                    mergedRecords += 1;
                 }
+                for (const record of oldBody.records) {
+                    if (!recordsByKey.has(record.recordKey)) {
+                        recordsByKey.set(record.recordKey, record);
+                        mergedRecords += 1;
+                    }
+                }
+
+                await this.writeTargetBody(newTargetId, Array.from(recordsByKey.values()), oldTarget.summaryLanguage);
             }
 
-            await this.writeTargetBody(newTargetId, Array.from(recordsByKey.values()));
             await this.removeTargets([oldTargetId]);
             renamedTargets += 1;
         }
@@ -276,8 +305,8 @@ export class SummaryStorageService {
         return { removedBodies };
     }
 
-    public async removeBrokenTargetIndex(targetId: string): Promise<void> {
-        this.targetIndex = this.targetIndex.filter(record => record.targetId !== targetId);
+    public async removeBrokenTargetIndex(targetId: string, summaryLanguage?: SummaryLanguage): Promise<void> {
+        this.targetIndex = this.targetIndex.filter(record => !(record.targetId === targetId && record.summaryLanguage === summaryLanguage));
         await this.persistIndex();
     }
 
@@ -289,8 +318,15 @@ export class SummaryStorageService {
         return this.indexPath;
     }
 
-    private readTargetBodySync(targetId: string): SummaryTargetBody {
-        const target = this.findTarget(targetId);
+    private readTargetBodySync(targetId: string, summaryLanguage?: SummaryLanguage): SummaryTargetBody {
+        if (!summaryLanguage) {
+            return {
+                targetId,
+                records: this.findTargets(targetId).flatMap(target => this.readIndexedTargetBodySync(target).records)
+            };
+        }
+
+        const target = this.findTarget(targetId, summaryLanguage);
         if (!target) {
             return { targetId, records: [] };
         }
@@ -300,15 +336,47 @@ export class SummaryStorageService {
             const parsed = JSON.parse(raw);
             return {
                 targetId,
-                records: Array.isArray(parsed.records) ? parsed.records.map(this.normalizeBodyRecord) : []
+                records: Array.isArray(parsed.records) ? parsed.records.map((record: any) => this.normalizeBodyRecord(record)) : []
             };
         } catch {
             return { targetId, records: [] };
         }
     }
 
-    private findTarget(targetId: string): SummaryTargetIndexRecord | undefined {
-        return this.targetIndex.find(record => record.targetId === targetId);
+    private findTarget(targetId: string, summaryLanguage?: SummaryLanguage): SummaryTargetIndexRecord | undefined {
+        return this.targetIndex.find(record => record.targetId === targetId && record.summaryLanguage === summaryLanguage);
+    }
+
+    private findTargets(targetId: string): SummaryTargetIndexRecord[] {
+        return this.targetIndex.filter(record => record.targetId === targetId);
+    }
+
+    private async readIndexedTargetBody(target: SummaryTargetIndexRecord): Promise<SummaryTargetBody> {
+        const bodyPath = this.bodyPath(target.bodyKey);
+        try {
+            const raw = await fs.promises.readFile(bodyPath, 'utf8');
+            const parsed = JSON.parse(raw);
+            return {
+                targetId: target.targetId,
+                records: Array.isArray(parsed.records) ? parsed.records.map((record: any) => this.normalizeBodyRecord(record)) : []
+            };
+        } catch (error: any) {
+            logger.error(`[SummaryStorageService] Failed to read target summary body: target=${target.targetId}, language=${target.summaryLanguage || '<legacy>'}, path=${bodyPath}, error=${error?.message || error}`);
+            throw error;
+        }
+    }
+
+    private readIndexedTargetBodySync(target: SummaryTargetIndexRecord): SummaryTargetBody {
+        try {
+            const raw = fs.readFileSync(this.bodyPath(target.bodyKey), 'utf8');
+            const parsed = JSON.parse(raw);
+            return {
+                targetId: target.targetId,
+                records: Array.isArray(parsed.records) ? parsed.records.map((record: any) => this.normalizeBodyRecord(record)) : []
+            };
+        } catch {
+            return { targetId: target.targetId, records: [] };
+        }
     }
 
     private toIndexRecord(targetId: string, record: SummaryBodyRecord): SummaryIndexRecord {
@@ -318,6 +386,7 @@ export class SummaryStorageService {
             label: record.label,
             modelName: record.modelName,
             promptVersion: record.promptVersion,
+            summaryLanguage: record.summaryLanguage,
             bodyHash: record.bodyHash,
             generatedAt: record.generatedAt,
             relationContextHash: record.relationContextHash,
@@ -333,6 +402,7 @@ export class SummaryStorageService {
             label: record.label,
             modelName: record.modelName,
             promptVersion: record.promptVersion,
+            summaryLanguage: record.summaryLanguage,
             bodyHash: record.bodyHash,
             generatedAt: record.generatedAt,
             summary: record.summary,
@@ -349,6 +419,7 @@ export class SummaryStorageService {
             label: String(record.label || ''),
             modelName: String(record.modelName || ''),
             promptVersion: String(record.promptVersion || ''),
+            summaryLanguage: this.normalizeSummaryLanguage(record.summaryLanguage),
             bodyHash: String(record.bodyHash || ''),
             generatedAt: String(record.generatedAt || ''),
             summary: String(record.summary || ''),
@@ -359,8 +430,9 @@ export class SummaryStorageService {
         };
     }
 
-    private createBodyKey(targetId: string): string {
-        return crypto.createHash('sha256').update(targetId, 'utf8').digest('hex');
+    private createBodyKey(targetId: string, summaryLanguage?: SummaryLanguage): string {
+        const base = crypto.createHash('sha256').update(targetId, 'utf8').digest('hex');
+        return summaryLanguage ? `${base}.${summaryLanguage}` : base;
     }
 
     private bodyPath(bodyKey: string): string {
@@ -371,9 +443,13 @@ export class SummaryStorageService {
     private async persistIndex(): Promise<void> {
         await fs.promises.mkdir(this.rootDir, { recursive: true });
         await fs.promises.writeFile(this.indexPath, JSON.stringify({
-            version: 2,
+            version: 3,
             targets: this.targetIndex
         }, null, 2), 'utf8');
+    }
+
+    private normalizeSummaryLanguage(value: unknown): SummaryLanguage | undefined {
+        return value === 'en' || value === 'zh-CN' ? value : undefined;
     }
 
     private async collectBodyFiles(dir: string): Promise<string[]> {
