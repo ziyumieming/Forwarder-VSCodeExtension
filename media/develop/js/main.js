@@ -66,6 +66,7 @@
     let activePathSummaryRequestId = null;
     let pathSummarySequence = 0;
     let pendingPathSummaryQuery = null;
+    let pathSummaryPanelHeight = null;
     let summaryHoldState = null;
     let summaryHoverState = null;
     const summaryRequestAnchors = new Map();
@@ -474,6 +475,7 @@
         const panel = document.getElementById('path-summary-panel');
         const tray = document.getElementById('call-path-tray');
         if (panel) {
+            applyPathSummaryPanelHeight(panel);
             panel.hidden = false;
         }
         if (tray) {
@@ -512,6 +514,59 @@
         return !!activePathSummaryRequestId;
     }
 
+    function clampPathSummaryPanelHeight(height) {
+        const viewportHeight = Math.max(240, window.innerHeight || document.documentElement.clientHeight || 720);
+        const maxHeight = Math.max(120, Math.min(viewportHeight * 0.72, viewportHeight - 120));
+        return Math.round(Math.min(Math.max(height, 120), maxHeight));
+    }
+
+    function applyPathSummaryPanelHeight(panel) {
+        if (!panel || pathSummaryPanelHeight === null) {
+            return;
+        }
+        panel.style.setProperty('--path-summary-height', clampPathSummaryPanelHeight(pathSummaryPanelHeight) + 'px');
+    }
+
+    function initializePathSummaryResize() {
+        const panel = document.getElementById('path-summary-panel');
+        const handle = document.getElementById('path-summary-resize-handle');
+        if (!panel || !handle) {
+            return;
+        }
+        let startY = 0;
+        let startHeight = 0;
+
+        handle.addEventListener('pointerdown', function (event) {
+            if (event.button !== undefined && event.button !== 0) {
+                return;
+            }
+            startY = event.clientY;
+            startHeight = panel.getBoundingClientRect().height;
+            handle.setPointerCapture?.(event.pointerId);
+            handle.classList.add('is-dragging');
+            event.preventDefault();
+        });
+
+        handle.addEventListener('pointermove', function (event) {
+            if (!handle.classList.contains('is-dragging')) {
+                return;
+            }
+            pathSummaryPanelHeight = clampPathSummaryPanelHeight(startHeight + (startY - event.clientY));
+            panel.style.setProperty('--path-summary-height', pathSummaryPanelHeight + 'px');
+            event.preventDefault();
+        });
+
+        const finishDrag = function (event) {
+            if (!handle.classList.contains('is-dragging')) {
+                return;
+            }
+            handle.classList.remove('is-dragging');
+            handle.releasePointerCapture?.(event.pointerId);
+        };
+        handle.addEventListener('pointerup', finishDrag);
+        handle.addEventListener('pointercancel', finishDrag);
+    }
+
     function isCompleteCallPathGraph(graphData) {
         if (!graphData || !graphData.meta || graphData.meta.pathFound !== true) {
             return false;
@@ -525,14 +580,11 @@
             || (Array.isArray(graphData?.meta?.segments) && graphData.meta.segments.find(segment => segment && segment.pathFound === false)?.reason)
             || 'No complete call path was found for the selected waypoints.';
         setPathSummaryContent('error', [
-            '### 调用链概览',
+            '### 执行意图',
             reason,
             '',
             '### 路径步骤',
-            'No complete path is available.',
-            '',
-            '### 关键传递',
-            'No end-to-end transfer can be explained because path calculation did not produce a complete route.'
+            'No complete path is available.'
         ].join('\n'));
     }
 
@@ -570,14 +622,11 @@
             return;
         }
         setPathSummaryContent('error', [
-            '### 调用链概览',
+            '### 执行意图',
             data?.message || 'Call path summary failed.',
             '',
             '### 路径步骤',
-            'The path graph may still be available, but no explanation was generated.',
-            '',
-            '### 关键传递',
-            'No transfer explanation is available for this request.'
+            'The path graph may still be available, but no explanation was generated.'
         ].join('\n'));
     }
 
@@ -2367,6 +2416,7 @@
     document.getElementById('btn-path-summary-close')?.addEventListener('click', function () {
         closePathSummaryPanel();
     });
+    initializePathSummaryResize();
 
     // 监听来自后端的消息
     window.addEventListener('message', (event) => {

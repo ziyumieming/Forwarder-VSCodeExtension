@@ -927,16 +927,39 @@ body {
     left: 14px;
     right: 14px;
     bottom: 14px;
-    max-height: min(34vh, 180px);
+    height: var(--path-summary-height, min(34vh, 180px));
+    min-height: 120px;
+    max-height: min(72vh, calc(100vh - 120px));
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 8px;
+    padding: 4px 8px 8px;
     border: 1px solid var(--stroke);
     border-radius: 12px;
     background: rgba(8, 19, 31, 0.82);
     backdrop-filter: blur(6px);
     z-index: 9;
+}
+
+.path-summary-resize-handle {
+    align-self: center;
+    width: 48px;
+    height: 10px;
+    cursor: ns-resize;
+    touch-action: none;
+    position: relative;
+    flex: 0 0 auto;
+}
+
+.path-summary-resize-handle::before {
+    content: "";
+    position: absolute;
+    left: 6px;
+    right: 6px;
+    top: 4px;
+    height: 2px;
+    border-radius: 999px;
+    background: rgba(190, 221, 243, 0.42);
 }
 
 .path-summary-panel[hidden] {
@@ -959,6 +982,7 @@ body {
 }
 
 .path-summary-content {
+    flex: 1 1 auto;
     min-height: 32px;
     overflow: auto;
     color: var(--text-main);

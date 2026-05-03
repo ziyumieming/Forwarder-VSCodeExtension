@@ -62,6 +62,17 @@ export class EmptySummaryError extends Error {
     }
 }
 
+export class SummaryDependencySummaryError extends Error {
+    constructor(
+        public readonly targetId: string,
+        public readonly missingNodeIds: string[],
+        public readonly staleNodeIds: string[]
+    ) {
+        super(`Unable to prepare fresh function summaries for ${targetId}: missing=${missingNodeIds.length}, stale=${staleNodeIds.length}.`);
+        this.name = 'SummaryDependencySummaryError';
+    }
+}
+
 export class SummaryArrangeService {
     public static readonly FUNCTION_PROMPT_VERSION = 'function-summary:v1';
     public static readonly FUNCTION_BATCH_PROMPT_VERSION = 'function-summary-batch:v1';
@@ -414,13 +425,13 @@ export class SummaryArrangeService {
         const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
         const modelId = selectedModel?.id;
         const baseContext = await SummaryContextService.buildClassContext(graph, nodeId);
-        const methodSummaryResult = await this.ensureFunctionSummariesForDependencies(
+        const methodSummaries = await this.ensureFreshFunctionSummariesForDependencies(
             graph,
             baseContext.methods.map(method => method.id),
             llmClient,
-            options
+            options,
+            nodeId
         );
-        const methodSummaries = new Map(methodSummaryResult.summaries.map(summary => [summary.nodeId, summary]));
         const contextWithMethods = await SummaryContextService.buildClassContext(graph, nodeId, { methodSummaries });
         const relatedBriefs = await this.ensureRelationBriefs(graph, contextWithMethods.relatedClasses, llmClient, options);
         const context = await SummaryContextService.buildClassContext(graph, nodeId, {
@@ -511,21 +522,11 @@ export class SummaryArrangeService {
         }
 
         const pathNodeIds = await this.collectCallPathFunctionNodeIds(graph, graphData, options.waypointIds || graphData.meta?.waypointIds || []);
-        const dependencyResult = await this.ensureFunctionSummariesForDependencies(graph, pathNodeIds, llmClient, options);
-        const refreshedStale = options.allowGenerate !== false && dependencyResult.staleNodeIds.length > 0
-            ? await this.refreshStaleCallPathSummaries(graph, dependencyResult.staleNodeIds, llmClient, options)
-            : [];
-        const summaries = new Map<string, FunctionSummaryData>();
-        for (const summary of dependencyResult.summaries) {
-            summaries.set(summary.nodeId, summary);
-        }
-        for (const summary of refreshedStale) {
-            summaries.set(summary.nodeId, summary);
-        }
+        const summaries = await this.ensureFreshFunctionSummariesForDependencies(graph, pathNodeIds, llmClient, options, 'call-path');
         const context = await SummaryContextService.buildCallPathSummaryContext(graph, graphData, options.waypointIds, {
             functionSummaries: summaries,
-            missingSummaryNodeIds: dependencyResult.missingNodeIds,
-            staleSummaryNodeIds: dependencyResult.staleNodeIds.filter(nodeId => !summaries.has(nodeId) || summaries.get(nodeId)?.stale)
+            missingSummaryNodeIds: [],
+            staleSummaryNodeIds: []
         });
         const prompt = this.buildCallPathSummaryPrompt(context);
         const queueKey = [
@@ -561,12 +562,15 @@ export class SummaryArrangeService {
 
     public static buildFunctionSummaryPrompt(context: FunctionSummaryContext): string {
         return [
-            '你是一个资深代码阅读助手。请根据给定函数/方法的签名和源码生成简洁 Markdown 摘要。',
+            '你是资深代码阅读助手。请根据给定函数或方法的签名和源码生成简洁 Markdown 摘要。',
             '',
-            '要求：',
-            '- 只分析当前函数/方法本身，不推测调用图、类层次或外部上下文。',
-            '- 输出包含两个小节：`功能概述` 和 `关键行为`。',
-            '- 语言简洁，避免复述每一行代码。',
+            '摘要应包含两个小节：',
+            '### 功能概述',
+            '### 关键行为',
+            '',
+            '阅读方法：',
+            '- 只依据当前函数或方法的签名与源码判断它承担的职责。',
+            '- 优先概括控制流、状态变化、返回值和关键副作用，避免逐行复述。',
             '',
             `函数名：${context.name}`,
             `签名：${context.signature}`,
@@ -598,10 +602,10 @@ export class SummaryArrangeService {
             'Return only valid JSON matching this schema:',
             SummaryJsonSchemaService.getFunctionBatchSchemaPrompt(),
             '',
-            'Rules:',
+            'Extraction guidance:',
             '- Include exactly one object per function you can summarize.',
             '- Use the exact FUNCTION_NODE_ID as nodeId.',
-            '- summary must be a non-empty concise Markdown string.',
+            '- Make each summary a non-empty concise Markdown string focused on responsibility, control flow, state changes, and return value.',
             '- Do not add text outside JSON.',
             '',
             `File: ${context.fileName}`,
@@ -613,8 +617,13 @@ export class SummaryArrangeService {
 
     public static buildClassRelationBriefPrompt(context: ClassSummaryContext): string {
         return [
-            'Relation brief: summarize this class for use as context in another class summary.',
+            'Summarize this class briefly so another class summary can understand its likely collaboration role.',
             'Return 1-3 concise sentences. Do not use Markdown headings.',
+            '',
+            'Evidence guidance:',
+            '- Method signatures and existing method summary coverage are the strongest local signals.',
+            '- Fields describe likely state or dependencies, but their names are weaker evidence than method behavior.',
+            '- Related class names only provide rough structural hints.',
             '',
             `Class: ${context.name}`,
             context.namespace ? `Namespace: ${context.namespace}` : '',
@@ -643,10 +652,11 @@ export class SummaryArrangeService {
             '### 主要行为',
             '### 协作关系',
             '',
-            'Rules:',
-            '- Field names are weak evidence. Use them with method summaries and typed relations.',
-            '- Related classes without summaries are low-confidence structural hints only.',
-            '- Do not invent internals for unsummarized related classes.',
+            'Evidence guidance:',
+            '- Use method summaries as the primary signal for behavior and responsibility.',
+            '- Use fields as weaker evidence for state, dependencies, and configuration.',
+            '- Use typed relations and related class summaries or briefs to explain collaboration.',
+            '- Only provide explanations for the key collaborations; The class names without corresponding descriptions have low credibility and are only used for auxiliary inference purposes. Do not mention them in the output.',
             '',
             `Class: ${context.name}`,
             context.namespace ? `Namespace: ${context.namespace}` : '',
@@ -656,7 +666,7 @@ export class SummaryArrangeService {
             ...context.fields.map(field => `- ${field.signature || [field.name, field.type].filter(Boolean).join(': ')}`),
             '',
             'Methods and summaries:',
-            ...context.methods.map(method => `- ${method.signature || method.name}${method.summary ? ` — ${method.summary}` : ' — no summary available'}`),
+            ...context.methods.map(method => `- ${method.signature || method.name}: ${method.summary}`),
             '',
             'Related classes with summaries:',
             ...context.summarizedRelatedClasses.map(related => `- ${related.label} [${related.relationTypes.join(', ')}]: ${related.summary}`),
@@ -670,40 +680,34 @@ export class SummaryArrangeService {
     }
 
     public static buildCallPathSummaryPrompt(context: CallPathSummaryContext): string {
-        const segmentLines = context.segments && context.segments.length > 0
-            ? context.segments.map((segment, index) => `- Segment ${index + 1}: ${segment.sourceLabel} -> ${segment.targetLabel}, found=${segment.pathFound}, depth=${segment.depth}${segment.reason ? `, reason=${segment.reason}` : ''}`)
-            : [];
+        const waypointIds = new Set(context.waypointIds);
+        const stepBlocks = context.steps.map((step, index) => {
+            const nextStep = context.steps[index + 1];
+            return [
+                `${step.order}. ${step.label}${waypointIds.has(step.nodeId) ? '（用户选中定位点）' : ''}`,
+                step.signature ? `   签名：${step.signature}` : '',
+                step.fileName ? `   文件：${step.fileName}` : '',
+                `   函数摘要：${step.summary}`,
+                nextStep
+                    ? `   下一步连接到 ${nextStep.label} `
+                    : '   为链路终点'
+            ].filter(Boolean).join('\n');
+        });
         return [
-            'You are a senior code reading assistant. Explain the current shortest function call path.',
+            '你是资深代码阅读助手。请解释下面这条函数调用链在语义上完成了什么。',
             '',
-            'Output exactly these Markdown sections:',
-            '### 调用链概览',
+            '输出两个 Markdown 小节：',
+            '### 执行意图',
             '### 路径步骤',
-            '### 关键传递',
             '',
-            'Rules:',
-            '- Explain only the returned shortest path; do not claim to cover all branches.',
-            '- Do not mention raw node ids or edge objects.',
-            '- If summaries are missing, say the explanation is based on signatures and path structure for those steps.',
-            '- Do not output a separate notes/caveats section.',
-            context.truncated ? '- The returned path is truncated by depth or node limits; mention that in the relevant section.' : '',
+            '阅读方法：',
+            '- 先依据每个函数摘要判断该步骤承担的业务职责、控制职责或数据处理职责。',
+            '- 再用函数签名、文件名和相邻步骤名称辅助判断控制权、数据或状态如何向下一步推进。',
+            '- 在“执行意图”中概括整条链路试图完成的动作、触发条件，以及关键数据或状态如何传递。',
+            '- 在“路径步骤”中结合函数摘要和签名按顺序解释每个函数的作用及其在链路中的作用。',
             '',
-            `Waypoints: ${context.waypointLabels.join(' -> ') || 'not specified'}`,
-            `Direction: ${context.direction || 'outgoing'}`,
-            `Depth: ${context.depth ?? context.steps.length - 1}`,
-            '',
-            ...(segmentLines.length > 0 ? ['Segments:', ...segmentLines, ''] : []),
-            'Path steps:',
-            ...context.steps.map(step => [
-                `${step.order}. ${step.label}`,
-                step.signature ? `   Signature: ${step.signature}` : '',
-                step.fileName ? `   File: ${step.fileName}` : '',
-                step.summary ? `   Function summary: ${step.summary}` : '   Function summary: unavailable',
-                step.stale ? '   Summary status: stale' : ''
-            ].filter(Boolean).join('\n')),
-            '',
-            context.missingSummaryNodeIds.length > 0 ? `Missing function summaries: ${context.missingSummaryNodeIds.length}` : '',
-            context.staleSummaryNodeIds.length > 0 ? `Stale function summaries: ${context.staleSummaryNodeIds.length}` : ''
+            '调用链步骤：',
+            ...stepBlocks
         ].filter(line => line !== '').join('\n');
     }
 
@@ -719,14 +723,11 @@ export class SummaryArrangeService {
         return {
             requestId,
             summary: [
-                '### 调用链概览',
+                '### 执行意图',
                 reason,
                 '',
                 '### 路径步骤',
-                'No complete path is available.',
-                '',
-                '### 关键传递',
-                'No end-to-end transfer can be explained because path calculation did not produce a complete route.'
+                'No complete path is available.'
             ].join('\n'),
             generatedAt: new Date().toISOString(),
             deterministic: true
@@ -736,6 +737,36 @@ export class SummaryArrangeService {
     private static async collectCallPathFunctionNodeIds(graph: ProjectGraph, graphData: GraphViewData, waypointIds: string[]): Promise<string[]> {
         const context = await SummaryContextService.buildCallPathSummaryContext(graph, graphData, waypointIds);
         return context.steps.map(step => step.nodeId);
+    }
+
+    private static async ensureFreshFunctionSummariesForDependencies(
+        graph: ProjectGraph,
+        nodeIds: string[],
+        llmClient: SummaryLLMClient,
+        options: SummaryServiceOptions,
+        targetId: string
+    ): Promise<Map<string, FunctionSummaryData>> {
+        const uniqueNodeIds = Array.from(new Set(nodeIds));
+        const dependencyResult = await this.ensureFunctionSummariesForDependencies(graph, uniqueNodeIds, llmClient, options);
+        const summaries = new Map<string, FunctionSummaryData>();
+        for (const summary of dependencyResult.summaries) {
+            summaries.set(summary.nodeId, summary);
+        }
+
+        if (options.allowGenerate !== false && dependencyResult.staleNodeIds.length > 0) {
+            const refreshed = await this.refreshStaleCallPathSummaries(graph, dependencyResult.staleNodeIds, llmClient, options);
+            for (const summary of refreshed) {
+                summaries.set(summary.nodeId, summary);
+            }
+        }
+
+        const missingNodeIds = uniqueNodeIds.filter(nodeId => !summaries.has(nodeId));
+        const staleNodeIds = uniqueNodeIds.filter(nodeId => summaries.get(nodeId)?.stale === true);
+        if (missingNodeIds.length > 0 || staleNodeIds.length > 0) {
+            throw new SummaryDependencySummaryError(targetId, missingNodeIds, staleNodeIds);
+        }
+
+        return summaries;
     }
 
     private static async refreshStaleCallPathSummaries(
