@@ -32,9 +32,9 @@ export class ProjectGraph {
     /**
      * 供持久化模块调用的接口：重命名工作区文件，更新相关的节点及其边
      */
-    public renameFile(oldUri: string, newUri: string): void {
+    public renameFile(oldUri: string, newUri: string): Map<string, string> {
         const nodeIds = this.fileNodes.get(oldUri);
-        if (!nodeIds) { return; }
+        if (!nodeIds) { return new Map(); }
 
         const newNodesSet = new Set<string>();
         this.fileNodes.set(newUri, newNodesSet);
@@ -92,6 +92,8 @@ export class ProjectGraph {
 
         reconstructEdges(this.outEdges);
         reconstructEdges(this.inEdges);
+
+        return idMap;
     }
 
     /**

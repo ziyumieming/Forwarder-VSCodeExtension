@@ -129,7 +129,8 @@ export class AnalysisRuntime {
         this.renameListener = vscode.workspace.onDidRenameFiles(async e => {
             for (const file of e.files) {
                 logger.info(`[AnalysisRuntime] 检测到文件重命名: ${file.oldUri.fsPath} -> ${file.newUri.fsPath}`);
-                this.projectGraph.renameFile(file.oldUri.toString(), file.newUri.toString());
+                const idMap = this.projectGraph.renameFile(file.oldUri.toString(), file.newUri.toString());
+                await this.renameSummariesForRenamedNodes(idMap);
                 if (this.syncService) {
                     await this.syncService.renameFileInIndex(file.oldUri, file.newUri);
                     // 不再需要触发此文件的重新扫描，因为仅更名未改变内容
@@ -197,8 +198,11 @@ export class AnalysisRuntime {
     private async executeDeletion(uri: vscode.Uri): Promise<void> {
         logger.info(`[AnalysisRuntime] 执行文件图结构删除与级联清理: ${uri.fsPath}`);
 
+        const removedNodeIds = this.projectGraph.getNodesForFile(uri.toString(), ['function', 'method']).map(node => node.id);
+
         // 1. 将删除事实同步给图管理器，得到被影响的文件
         const affectedUris = this.projectGraph.deleteFileSymbols(uri.toString());
+        await this.cleanupSummariesForRemovedNodes(removedNodeIds);
 
         // 2. 从本地缓存索引中移除该文件
         if (this.syncService) {
@@ -255,7 +259,8 @@ export class AnalysisRuntime {
             if (changes.renamed && changes.renamed.length > 0) {
                 for (const rename of changes.renamed) {
                     logger.info(`[AnalysisRuntime] 处理文件重命名 (增量同步): ${rename.oldUri.fsPath} -> ${rename.newUri.fsPath}`);
-                    this.projectGraph.renameFile(rename.oldUri.toString(), rename.newUri.toString());
+                    const idMap = this.projectGraph.renameFile(rename.oldUri.toString(), rename.newUri.toString());
+                    await this.renameSummariesForRenamedNodes(idMap);
                     await this.syncService.removeFileFromIndex(rename.oldUri);
                 }
             }
@@ -365,6 +370,7 @@ export class AnalysisRuntime {
 
         // 从缓存中获取之前的结构指纹
         const oldFingerprint = this.projectGraph.fileFingerprints.get(uri.toString());
+        const oldSummaryNodeIds = this.projectGraph.getNodesForFile(uri.toString(), ['function', 'method']).map(node => node.id);
 
         // 1. 调用适配器服务，从LSP提取并组装指定文件的 IRNode 与内部关系边界
         const payload = await AdapterService.extractFileSymbols(uri, oldFingerprint);
@@ -388,9 +394,37 @@ export class AnalysisRuntime {
 
         // 2. 数据下沉，返回可能受影响的依赖此文件的其他文档的 URI
         const affectedUris = this.projectGraph.updateFileSymbols(payload);
+        const currentSummaryNodeIds = new Set(this.projectGraph.getNodesForFile(uri.toString(), ['function', 'method']).map(node => node.id));
+        const removedSummaryNodeIds = oldSummaryNodeIds.filter(nodeId => !currentSummaryNodeIds.has(nodeId));
+        await this.cleanupSummariesForRemovedNodes(removedSummaryNodeIds);
 
         logger.info(`[AnalysisRuntime] 更新图缓存成功，新增/更新节点 ${payload.nodes.length} 个，关系边 ${payload.edges.length} 条，影响旁支文件 ${affectedUris.length} 个。`);
         return affectedUris;
+    }
+
+    private async cleanupSummariesForRemovedNodes(nodeIds: string[]): Promise<void> {
+        if (nodeIds.length === 0 || !this.summaryCacheService) {
+            return;
+        }
+
+        const uniqueNodeIds = Array.from(new Set(nodeIds));
+        const removed = await this.summaryCacheService.removeSummariesForTargets('function', uniqueNodeIds);
+        const removedMethods = await this.summaryCacheService.removeSummariesForTargets('method', uniqueNodeIds);
+        const removedRecords = removed.removedRecords + removedMethods.removedRecords;
+        if (removedRecords > 0) {
+            logger.info(`[AnalysisRuntime] 已清理失效节点摘要: nodes=${uniqueNodeIds.length}, records=${removedRecords}`);
+        }
+    }
+
+    private async renameSummariesForRenamedNodes(idMap: Map<string, string>): Promise<void> {
+        if (idMap.size === 0 || !this.summaryCacheService) {
+            return;
+        }
+
+        const result = await this.summaryCacheService.renameTargets(idMap);
+        if (result.renamedTargets > 0) {
+            logger.info(`[AnalysisRuntime] 已迁移重命名节点摘要: targets=${result.renamedTargets}, mergedRecords=${result.mergedRecords}`);
+        }
     }
 
     // 编排调用: 查询全局视图

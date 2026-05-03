@@ -1,7 +1,7 @@
+import * as crypto from 'crypto';
 import { FunctionSummaryData } from '../models/GraphDefinition';
 import { logger } from '../utils/logger';
-import { SummaryIndexRecord, SummaryStorageService, SummaryStoredRecord } from './SummaryStorageServices';
-import * as crypto from 'crypto';
+import { SummaryBodyRecord, SummaryStorageService, SummaryStoredRecord, SummaryTargetKind } from './SummaryStorageServices';
 
 export interface SummaryLookupRequest {
     nodeId: string;
@@ -23,34 +23,29 @@ export interface GeneratedFunctionSummaryRecord extends FunctionSummaryData {
 }
 
 export class SummaryCacheService {
-    private readonly bodyCache = new Map<string, string>();
+    private readonly targetRecordCache = new Map<string, SummaryBodyRecord[]>();
 
     constructor(private readonly storage: SummaryStorageService) { }
 
     public async lookupFunctionSummary(request: SummaryLookupRequest): Promise<FunctionSummaryData | undefined> {
-        const records = this.findMatchingRecords(request);
+        const loaded = await this.findMatchingRecords(request);
+        const records = loaded.records;
         for (const record of records) {
-            const loaded = await this.loadSummary(record);
-            if (!String(loaded.summary || '').trim()) {
-                logger.warn(`[SummaryBackend] backend-cache-corrupt-empty-summary function=${request.nodeId}, model=${record.modelName}, recordKey=${record.recordKey}, status=${loaded.cacheStatus}`);
-                this.bodyCache.delete(record.recordKey);
-                await this.storage.removeRecords([record.recordKey]);
+            if (!String(record.summary || '').trim()) {
+                logger.warn(`[SummaryBackend] backend-cache-corrupt-empty-summary function=${request.nodeId}, model=${record.modelName}, recordKey=${record.recordKey}`);
+                await this.removeRecordKeys(request.nodeId, [record.recordKey]);
                 continue;
             }
 
-            logger.info(`[SummaryBackend] backend-cache-hit function=${request.nodeId}, model=${record.modelName}, stale=${record.bodyHash !== request.currentBodyHash}, status=${loaded.cacheStatus}, summaryType=${typeof loaded.summary}, summaryLength=${String(loaded.summary || '').length}`);
-            return this.toFunctionSummaryData(record, loaded.summary, request.currentBodyHash, {
+            logger.info(`[SummaryBackend] backend-cache-hit function=${request.nodeId}, model=${record.modelName}, stale=${record.bodyHash !== request.currentBodyHash}, summaryType=${typeof record.summary}, summaryLength=${String(record.summary || '').length}`);
+            return this.toFunctionSummaryData(request.nodeId, record, request.currentBodyHash, {
                 cacheStatus: loaded.cacheStatus,
                 historyIndex: 0,
                 historyCount: records.length
             });
         }
 
-        if (records.length === 0) {
-            logger.info(`[SummaryBackend] backend-cache-miss function=${request.nodeId}, model=${request.modelName || '*'}, prompt=${request.promptVersion}`);
-        } else {
-            logger.info(`[SummaryBackend] backend-cache-miss function=${request.nodeId}, model=${request.modelName || '*'}, prompt=${request.promptVersion}, reason=all-matching-records-empty`);
-        }
+        logger.info(`[SummaryBackend] backend-cache-miss function=${request.nodeId}, model=${request.modelName || '*'}, prompt=${request.promptVersion}`);
         return undefined;
     }
 
@@ -67,7 +62,6 @@ export class SummaryCacheService {
             targetId: record.nodeId,
             label: record.label,
             modelName: record.modelName,
-            modelId: record.modelId,
             promptVersion: record.promptVersion,
             bodyHash: record.bodyHash,
             generatedAt: record.generatedAt,
@@ -75,11 +69,11 @@ export class SummaryCacheService {
         };
 
         await this.storage.writeRecord(stored);
-        this.bodyCache.set(recordKey, record.summary);
+        this.targetRecordCache.delete(record.nodeId);
         await this.pruneHistory(record.nodeId, record.modelName, record.promptVersion);
         logger.info(`[SummaryCacheService] Stored generated function summary: function=${record.nodeId}, model=${record.modelName}, bodyHash=${record.bodyHash.slice(0, 12)}, status=${record.cacheStatus || 'generated'}`);
 
-        const history = this.findMatchingRecords({
+        const history = await this.findMatchingRecords({
             nodeId: record.nodeId,
             modelName: record.modelName,
             promptVersion: record.promptVersion,
@@ -88,66 +82,110 @@ export class SummaryCacheService {
 
         return {
             ...record,
+            modelId: undefined,
             cacheStatus: record.cacheStatus || 'generated',
             stale: false,
             historyIndex: 0,
-            historyCount: history.length
+            historyCount: history.records.length
         };
     }
 
     public async getFunctionSummaryHistory(request: SummaryLookupRequest): Promise<SummaryHistoryResult> {
-        const records = this.findMatchingRecords(request);
+        const loaded = await this.findMatchingRecords(request);
+        const records = loaded.records;
         logger.info(`[SummaryCacheService] Loading summary history: function=${request.nodeId}, model=${request.modelName || '*'}, count=${records.length}`);
-        const summaries = await Promise.all(records.map(async (record, index) => {
-            const loaded = await this.loadSummary(record);
-            return this.toFunctionSummaryData(record, loaded.summary, request.currentBodyHash, {
+        return {
+            nodeId: request.nodeId,
+            records: records.map((record, index) => this.toFunctionSummaryData(record.targetId || request.nodeId, record, request.currentBodyHash, {
                 cacheStatus: loaded.cacheStatus,
                 historyIndex: index,
                 historyCount: records.length
-            });
-        }));
-
-        return {
-            nodeId: request.nodeId,
-            records: summaries
+            }))
         };
     }
 
-    private findMatchingRecords(request: SummaryLookupRequest): SummaryIndexRecord[] {
-        return this.storage.getIndexRecords('function', request.nodeId)
-            .filter(record => (!request.modelName || record.modelName === request.modelName) && record.promptVersion === request.promptVersion)
-            .sort((left, right) => right.generatedAt.localeCompare(left.generatedAt));
+    public async removeSummariesForTargets(_targetKind: SummaryTargetKind, targetIds: string[]): Promise<{ removedRecords: number }> {
+        const result = await this.storage.removeTargets(targetIds);
+        for (const targetId of targetIds) {
+            this.targetRecordCache.delete(targetId);
+        }
+        return result;
     }
 
-    private async loadSummary(record: SummaryIndexRecord): Promise<{ summary: string; cacheStatus: 'memory-hit' | 'index-disk-hit' }> {
-        const cached = this.bodyCache.get(record.recordKey);
-        if (cached !== undefined) {
+    public async renameTargets(idMap: Map<string, string>): Promise<{ renamedTargets: number; mergedRecords: number }> {
+        const result = await this.storage.renameTargets(idMap);
+        for (const [oldTargetId, newTargetId] of idMap.entries()) {
+            this.targetRecordCache.delete(oldTargetId);
+            this.targetRecordCache.delete(newTargetId);
+        }
+
+        for (const newTargetId of new Set(idMap.values())) {
+            const records = (await this.loadTargetRecords(newTargetId)).records;
+            const groupedKeys = new Set(records.map(record => `${record.modelName}\u0000${record.promptVersion}`));
+            for (const key of groupedKeys) {
+                const [modelName, promptVersion] = key.split('\u0000');
+                await this.pruneHistory(newTargetId, modelName, promptVersion);
+            }
+        }
+
+        return result;
+    }
+
+    private async findMatchingRecords(request: SummaryLookupRequest): Promise<{ records: Array<SummaryBodyRecord & { targetId?: string }>; cacheStatus: 'memory-hit' | 'index-disk-hit' }> {
+        const loaded = await this.loadTargetRecords(request.nodeId);
+        return {
+            records: loaded.records
+                .filter(record => (!request.modelName || record.modelName === request.modelName) && record.promptVersion === request.promptVersion)
+                .sort((left, right) => right.generatedAt.localeCompare(left.generatedAt)),
+            cacheStatus: loaded.cacheStatus
+        };
+    }
+
+    private async loadTargetRecords(targetId: string): Promise<{ records: SummaryBodyRecord[]; cacheStatus: 'memory-hit' | 'index-disk-hit' }> {
+        const cached = this.targetRecordCache.get(targetId);
+        if (cached) {
             return {
-                summary: cached,
+                records: cached.map(record => ({ ...record })),
                 cacheStatus: 'memory-hit'
             };
         }
 
-        const body = await this.storage.readBody(record.recordKey);
-        this.bodyCache.set(record.recordKey, body.summary);
-        return {
-            summary: body.summary,
-            cacheStatus: 'index-disk-hit'
-        };
+        try {
+            const body = await this.storage.readTargetBody(targetId);
+            this.targetRecordCache.set(targetId, body.records);
+            return {
+                records: body.records.map(record => ({ ...record })),
+                cacheStatus: 'index-disk-hit'
+            };
+        } catch (error: any) {
+            logger.warn(`[SummaryBackend] backend-cache-corrupt-missing-summary function=${targetId}, error=${error?.message || error}`);
+            this.targetRecordCache.delete(targetId);
+            await this.storage.removeBrokenTargetIndex(targetId);
+            return {
+                records: [],
+                cacheStatus: 'index-disk-hit'
+            };
+        }
+    }
+
+    private async removeRecordKeys(targetId: string, recordKeys: string[]): Promise<void> {
+        const keySet = new Set(recordKeys);
+        const records = (await this.loadTargetRecords(targetId)).records.filter(record => !keySet.has(record.recordKey));
+        await this.storage.writeTargetBody(targetId, records);
+        this.targetRecordCache.delete(targetId);
     }
 
     private toFunctionSummaryData(
-        record: SummaryIndexRecord,
-        summary: string,
+        targetId: string,
+        record: SummaryBodyRecord,
         currentBodyHash: string,
         options: Pick<FunctionSummaryData, 'cacheStatus' | 'historyIndex' | 'historyCount'>
     ): FunctionSummaryData {
         return {
-            nodeId: record.targetId,
+            nodeId: targetId,
             label: record.label,
-            summary,
+            summary: record.summary,
             modelName: record.modelName,
-            modelId: record.modelId,
             generatedAt: record.generatedAt,
             bodyHash: record.bodyHash,
             promptVersion: record.promptVersion,
@@ -158,23 +196,25 @@ export class SummaryCacheService {
 
     private createRecordKey(record: GeneratedFunctionSummaryRecord): string {
         const seed = [
-            record.nodeId,
             record.modelName,
             record.promptVersion,
-            record.generatedAt,
-            Math.random().toString(36).slice(2)
+            record.bodyHash,
+            record.generatedAt
         ].join('|');
         return crypto.createHash('sha256').update(seed, 'utf8').digest('hex');
     }
 
     private async pruneHistory(nodeId: string, modelName: string, promptVersion: string): Promise<void> {
-        const records = this.storage.getIndexRecords('function', nodeId)
+        const records = (await this.loadTargetRecords(nodeId)).records;
+        const matching = records
             .filter(record => record.modelName === modelName && record.promptVersion === promptVersion)
             .sort((left, right) => right.generatedAt.localeCompare(left.generatedAt));
-        const stale = records.slice(3);
-        if (stale.length > 0) {
-            stale.forEach(record => this.bodyCache.delete(record.recordKey));
-            await this.storage.removeRecords(stale.map(record => record.recordKey));
+        const staleKeys = new Set(matching.slice(3).map(record => record.recordKey));
+        if (staleKeys.size === 0) {
+            return;
         }
+
+        await this.storage.writeTargetBody(nodeId, records.filter(record => !staleKeys.has(record.recordKey)));
+        this.targetRecordCache.delete(nodeId);
     }
 }
