@@ -3,7 +3,7 @@ import { ProjectGraph } from '../models/GraphManager';
 import { LLMPromptResult, LLMService } from './LLMServices';
 import { LLMModelService } from './LLMModelServices';
 import { SummaryCacheService } from './SummaryCacheServices';
-import { ClassSummaryContext, FunctionSummaryContext, RelatedClassContext, SummaryContextService } from './SummaryContextServices';
+import { FunctionSummaryContext, RelatedClassContext, SummaryContextService } from './SummaryContextServices';
 import { SummaryJsonSchemaService } from './SummarySchemaServices';
 import { SummaryQueueService } from './SummaryQueueServices';
 import { logger } from '../utils/logger';
@@ -134,7 +134,7 @@ export class SummaryArrangeService {
 
         const generate = async () => {
             logger.info(`[SummaryBackend] llm-generate-start nodeId=${context.nodeId}, language=${summaryLanguage}, model=${modelName}, selectedModelId=${modelId || '<fallback>'}, forceRefresh=${options.forceRefresh === true}`);
-            const prompt = this.buildFunctionSummaryPrompt(context, summaryLanguage);
+            const prompt = PromptLanguageService.buildFunctionSummaryPrompt(context, summaryLanguage);
             const response = selectedModel?.model
                 ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
                 : await llmClient.sendPrompt(prompt);
@@ -217,7 +217,11 @@ export class SummaryArrangeService {
         ].join('|');
 
         const generate = async (): Promise<FunctionSummaryBatchResult> => {
-            const prompt = this.buildFunctionBatchSummaryPrompt(context, summaryLanguage);
+            const prompt = PromptLanguageService.buildFunctionBatchSummaryPrompt(
+                context,
+                summaryLanguage,
+                SummaryJsonSchemaService.getFunctionBatchSchemaPrompt()
+            );
             const response = selectedModel?.model
                 ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
                 : await llmClient.sendPrompt(prompt);
@@ -397,7 +401,7 @@ export class SummaryArrangeService {
         }
 
         const generate = async (): Promise<ClassSummaryData> => {
-            const prompt = this.buildClassRelationBriefPrompt(context, summaryLanguage);
+            const prompt = PromptLanguageService.buildClassRelationBriefPrompt(context, summaryLanguage);
             const response = selectedModel?.model
                 ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
                 : await llmClient.sendPrompt(prompt);
@@ -485,7 +489,7 @@ export class SummaryArrangeService {
         }
 
         const generate = async (): Promise<ClassSummaryData> => {
-            const prompt = this.buildClassSummaryPrompt(context, summaryLanguage);
+            const prompt = PromptLanguageService.buildClassSummaryPrompt(context, summaryLanguage);
             const response = selectedModel?.model
                 ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
                 : await llmClient.sendPrompt(prompt);
@@ -545,7 +549,7 @@ export class SummaryArrangeService {
         const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
         const modelId = selectedModel?.id;
         const summaryLanguage = this.resolveSummaryLanguage(options);
-        const failure = this.buildDeterministicCallPathFailure(graph, graphData, requestId, summaryLanguage);
+        const failure = PromptLanguageService.buildDeterministicCallPathFailure(graph, graphData, requestId, summaryLanguage);
         if (failure) {
             return failure;
         }
@@ -557,7 +561,7 @@ export class SummaryArrangeService {
             missingSummaryNodeIds: [],
             staleSummaryNodeIds: []
         });
-        const prompt = this.buildCallPathSummaryPrompt(context, summaryLanguage);
+        const prompt = PromptLanguageService.buildCallPathSummaryPrompt(context, summaryLanguage);
         const queueKey = [
             'call-path-summary',
             pathNodeIds.join(','),
@@ -589,208 +593,6 @@ export class SummaryArrangeService {
         };
 
         return options.queueService ? options.queueService.enqueue(queueKey, generate) : generate();
-    }
-
-    public static buildFunctionSummaryPrompt(context: FunctionSummaryContext, summaryLanguage: SummaryLanguage = 'zh-CN'): string {
-        const sections = PromptLanguageService.functionSections(summaryLanguage);
-        return [
-            PromptLanguageService.instruction(summaryLanguage),
-            summaryLanguage === 'en'
-                ? 'You are a senior code reading assistant. Generate a concise Markdown summary from the given function or method signature and source code.'
-                : '你是资深代码阅读助手。请根据给定函数或方法的签名和源码生成简洁 Markdown 摘要。',
-            '',
-            summaryLanguage === 'en' ? 'The summary must contain these two sections:' : '摘要应包含两个小节：',
-            sections.overview,
-            sections.behavior,
-            '',
-            summaryLanguage === 'en' ? 'Reading guidance:' : '阅读方法：',
-            summaryLanguage === 'en'
-                ? '- Use only the current function or method signature and source code to infer its responsibility.'
-                : '- 只依据当前函数或方法的签名与源码判断它承担的职责。',
-            summaryLanguage === 'en'
-                ? '- Prefer summarizing control flow, state changes, return values, and key side effects. Avoid line-by-line narration.'
-                : '- 优先概括控制流、状态变化、返回值和关键副作用，避免逐行复述。',
-            '',
-            `${summaryLanguage === 'en' ? 'Function' : '函数名'}: ${context.name}`,
-            `${summaryLanguage === 'en' ? 'Signature' : '签名'}: ${context.signature}`,
-            context.namespace ? `${summaryLanguage === 'en' ? 'Namespace' : '命名空间'}: ${context.namespace}` : '',
-            `${summaryLanguage === 'en' ? 'File' : '文件'}: ${context.fileName}`,
-            `${summaryLanguage === 'en' ? 'Code language' : '语言'}: ${context.languageId}`,
-            '',
-            summaryLanguage === 'en' ? 'Source:' : '源码：',
-            '```' + this.markdownFenceLanguage(context.languageId),
-            context.sourceCode,
-            '```'
-        ].filter(line => line !== '').join('\n');
-    }
-
-    public static buildFunctionBatchSummaryPrompt(context: Awaited<ReturnType<typeof SummaryContextService.buildFunctionBatchContext>>, summaryLanguage: SummaryLanguage = 'zh-CN'): string {
-        const sections = context.functions.flatMap(fn => [
-            `FUNCTION_NODE_ID: ${fn.nodeId}`,
-            `FUNCTION_NAME: ${fn.name}`,
-            `SIGNATURE: ${fn.signature}`,
-            'SOURCE:',
-            '```' + this.markdownFenceLanguage(fn.languageId),
-            fn.sourceCode,
-            '```',
-            ''
-        ]);
-
-        return [
-            PromptLanguageService.instruction(summaryLanguage),
-            'You are a senior code reading assistant. Generate concise Markdown summaries for the listed functions.',
-            'Return only valid JSON matching this schema:',
-            SummaryJsonSchemaService.getFunctionBatchSchemaPrompt(),
-            '',
-            'Extraction guidance:',
-            '- Include exactly one object per function you can summarize.',
-            '- Use the exact FUNCTION_NODE_ID as nodeId.',
-            '- Make each summary a non-empty concise Markdown string focused on responsibility, control flow, state changes, and return value.',
-            summaryLanguage === 'en'
-                ? '- The summary value of each JSON object must be written in English.'
-                : '- 每个 JSON 对象的 summary 字段内容必须使用简体中文。',
-            '- Do not add text outside JSON.',
-            '',
-            `File: ${context.fileName}`,
-            `Language: ${context.languageId}`,
-            '',
-            ...sections
-        ].join('\n');
-    }
-
-    public static buildClassRelationBriefPrompt(context: ClassSummaryContext, summaryLanguage: SummaryLanguage = 'zh-CN'): string {
-        return [
-            PromptLanguageService.instruction(summaryLanguage),
-            'Summarize this class briefly so another class summary can understand its likely collaboration role.',
-            'Return 1-3 concise sentences. Do not use Markdown headings.',
-            '',
-            'Evidence guidance:',
-            '- Method signatures and existing method summary coverage are the strongest local signals.',
-            '- Fields describe likely state or dependencies, but their names are weaker evidence than method behavior.',
-            '- Related class names only provide rough structural hints.',
-            '',
-            `Class: ${context.name}`,
-            context.namespace ? `Namespace: ${context.namespace}` : '',
-            `File: ${context.fileName}`,
-            '',
-            'Fields:',
-            ...context.fields.map(field => `- ${field.signature || [field.name, field.type].filter(Boolean).join(': ')}`),
-            '',
-            'Methods:',
-            ...context.methods.map(method => `- ${method.signature || method.name}`),
-            '',
-            `Existing method summary coverage: ${context.contextCoverage.methodSummaryCount || 0}/${context.contextCoverage.methodCount || 0}`,
-            '',
-            'Related class names are low-confidence structure hints only:',
-            ...context.relatedClasses.map(related => `- ${related.label} [${related.relationTypes.join(', ')}]`)
-        ].filter(line => line !== '').join('\n');
-    }
-
-    public static buildClassSummaryPrompt(context: ClassSummaryContext, summaryLanguage: SummaryLanguage = 'zh-CN'): string {
-        const classSections = PromptLanguageService.classSections(summaryLanguage);
-        return [
-            PromptLanguageService.instruction(summaryLanguage),
-            'You are a senior code reading assistant. Generate a class summary that explains the role of this class in the project.',
-            '',
-            'Output exactly these Markdown sections:',
-            ...classSections,
-            '',
-            'Evidence guidance:',
-            '- Use method summaries as the primary signal for behavior and responsibility.',
-            '- Use fields as weaker evidence for state, dependencies, and configuration.',
-            '- Use typed relations and related class summaries or briefs to explain collaboration.',
-            '- Only provide explanations for the key collaborations; The class names without corresponding descriptions have low credibility and are only used for auxiliary inference purposes. Do not mention them in the output.',
-            '',
-            `Class: ${context.name}`,
-            context.namespace ? `Namespace: ${context.namespace}` : '',
-            `File: ${context.fileName}`,
-            '',
-            'Fields:',
-            ...context.fields.map(field => `- ${field.signature || [field.name, field.type].filter(Boolean).join(': ')}`),
-            '',
-            'Methods and summaries:',
-            ...context.methods.map(method => `- ${method.signature || method.name}: ${method.summary}`),
-            '',
-            'Related classes with summaries:',
-            ...context.summarizedRelatedClasses.map(related => `- ${related.label} [${related.relationTypes.join(', ')}]: ${related.summary}`),
-            '',
-            'Related class briefs:',
-            ...context.relationBriefs.map(related => `- ${related.label} [${related.relationTypes.join(', ')}]: ${related.brief}`),
-            '',
-            'Unsummarized related classes (low confidence names only):',
-            ...context.unsummarizedRelatedClasses.map(related => `- ${related.label} [${related.relationTypes.join(', ')}]`)
-        ].filter(line => line !== '').join('\n');
-    }
-
-    public static buildCallPathSummaryPrompt(context: CallPathSummaryContext, summaryLanguage: SummaryLanguage = 'zh-CN'): string {
-        const callPathSections = PromptLanguageService.callPathSections(summaryLanguage);
-        const waypointIds = new Set(context.waypointIds);
-        const stepBlocks = context.steps.map((step, index) => {
-            const nextStep = context.steps[index + 1];
-            return [
-                `${step.order}. ${step.label}${waypointIds.has(step.nodeId) ? (summaryLanguage === 'en' ? ' (user-selected waypoint)' : '（用户选中定位点）') : ''}`,
-                step.signature ? `   ${summaryLanguage === 'en' ? 'Signature' : '签名'}: ${step.signature}` : '',
-                step.fileName ? `   ${summaryLanguage === 'en' ? 'File' : '文件'}: ${step.fileName}` : '',
-                `   ${summaryLanguage === 'en' ? 'Function summary' : '函数摘要'}: ${step.summary}`,
-                nextStep
-                    ? `   ${summaryLanguage === 'en' ? 'Next step connects to' : '下一步连接到'} ${nextStep.label} `
-                    : `   ${summaryLanguage === 'en' ? 'End of path' : '为链路终点'}`
-            ].filter(Boolean).join('\n');
-        });
-        return [
-            PromptLanguageService.instruction(summaryLanguage),
-            summaryLanguage === 'en'
-                ? 'You are a senior code reading assistant. Explain what the following function call path accomplishes semantically.'
-                : '你是资深代码阅读助手。请解释下面这条函数调用链在语义上完成了什么。',
-            '',
-            summaryLanguage === 'en' ? 'Output two Markdown sections:' : '输出两个 Markdown 小节：',
-            callPathSections.intent,
-            callPathSections.steps,
-            '',
-            summaryLanguage === 'en' ? 'Reading guidance:' : '阅读方法：',
-            summaryLanguage === 'en'
-                ? '- First use each function summary to infer whether the step is responsible for business behavior, control flow, or data processing.'
-                : '- 先依据每个函数摘要判断该步骤承担的业务职责、控制职责或数据处理职责。',
-            summaryLanguage === 'en'
-                ? '- Then use signatures, file names, and neighboring step names to infer how control, data, or state moves forward.'
-                : '- 再用函数签名、文件名和相邻步骤名称辅助判断控制权、数据或状态如何向下一步推进。',
-            summaryLanguage === 'en'
-                ? '- In "Execution Intent", summarize the action, trigger conditions, and key data or state propagation.'
-                : '- 在“执行意图”中概括整条链路试图完成的动作、触发条件，以及关键数据或状态如何传递。',
-            summaryLanguage === 'en'
-                ? '- In "Path Steps", explain each function in order using its summary and signature.'
-                : '- 在“路径步骤”中结合函数摘要和签名按顺序解释每个函数的作用及其在链路中的作用。',
-            '',
-            summaryLanguage === 'en' ? 'Call path steps:' : '调用链步骤：',
-            ...stepBlocks
-        ].filter(line => line !== '').join('\n');
-    }
-
-    private static buildDeterministicCallPathFailure(graph: ProjectGraph, graphData: GraphViewData, requestId: string, summaryLanguage: SummaryLanguage): CallPathSummaryResult | undefined {
-        const failedSegment = graphData.meta?.segments?.find(segment => segment.pathFound === false);
-        if (graphData.meta?.pathFound === true && !failedSegment) {
-            return undefined;
-        }
-        const formatNode = (nodeId: string) => graph.getNode(nodeId)?.name || nodeId;
-        const reason = failedSegment
-            ? `Segment ${formatNode(failedSegment.sourceId)} -> ${formatNode(failedSegment.targetId)} failed${failedSegment.reason ? `: ${failedSegment.reason}` : '.'}`
-            : graphData.meta?.reason || (summaryLanguage === 'en'
-                ? 'No call path was found for the selected waypoints.'
-                : '没有找到所选途经点之间的完整调用链。');
-        const sections = PromptLanguageService.callPathSections(summaryLanguage);
-        return {
-            requestId,
-            summary: [
-                sections.intent,
-                reason,
-                '',
-                sections.steps,
-                summaryLanguage === 'en' ? 'No complete path is available.' : '没有可用的完整路径。'
-            ].join('\n'),
-            summaryLanguage,
-            generatedAt: new Date().toISOString(),
-            deterministic: true
-        };
     }
 
     private static async collectCallPathFunctionNodeIds(graph: ProjectGraph, graphData: GraphViewData, waypointIds: string[]): Promise<string[]> {
@@ -895,16 +697,5 @@ export class SummaryArrangeService {
             briefs.set(related.nodeId, brief);
         }
         return briefs;
-    }
-
-    private static markdownFenceLanguage(languageId: string): string {
-        const normalized = String(languageId || '').trim();
-        if (normalized === 'typescriptreact') {
-            return 'tsx';
-        }
-        if (normalized === 'javascriptreact') {
-            return 'jsx';
-        }
-        return normalized;
     }
 }
