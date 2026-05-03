@@ -8,6 +8,7 @@ export interface SummaryLookupRequest {
     modelName?: string;
     promptVersion: string;
     currentBodyHash: string;
+    fallbackPromptVersions?: string[];
 }
 
 export interface SummaryHistoryResult {
@@ -47,6 +48,25 @@ export class SummaryCacheService {
 
         logger.info(`[SummaryBackend] backend-cache-miss function=${request.nodeId}, model=${request.modelName || '*'}, prompt=${request.promptVersion}`);
         return undefined;
+    }
+
+    public async lookupFunctionSummaries(requests: SummaryLookupRequest[]): Promise<Map<string, FunctionSummaryData>> {
+        const results = new Map<string, FunctionSummaryData>();
+        for (const request of requests) {
+            const promptVersions = [request.promptVersion, ...(request.fallbackPromptVersions || [])];
+            for (const promptVersion of promptVersions) {
+                const found = await this.lookupFunctionSummary({
+                    ...request,
+                    promptVersion,
+                    fallbackPromptVersions: undefined
+                });
+                if (found) {
+                    results.set(request.nodeId, found);
+                    break;
+                }
+            }
+        }
+        return results;
     }
 
     public async storeGeneratedFunctionSummary(record: GeneratedFunctionSummaryRecord): Promise<FunctionSummaryData> {

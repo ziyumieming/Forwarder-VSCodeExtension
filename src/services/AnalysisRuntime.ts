@@ -8,7 +8,7 @@ import { AnalysisIndexStatus, EdgeRelation, FunctionRef, FunctionSummaryData, Gr
 import { SourceLocationService } from './SourceLocationServices';
 import { AnalysisIndexStatusService } from './StatusServices';
 import { logger } from '../utils/logger';
-import { SummaryArrangeService } from './SummaryArrangeServices';
+import { FunctionSummaryDependencyResult, SummaryArrangeService } from './SummaryArrangeServices';
 import { SummaryStorageService } from './SummaryStorageServices';
 import { SummaryCacheService } from './SummaryCacheServices';
 import { SummaryQueueService } from './SummaryQueueServices';
@@ -534,6 +534,17 @@ export class AnalysisRuntime {
             modelName,
             promptVersion: SummaryArrangeService.FUNCTION_PROMPT_VERSION,
             currentBodyHash: context.bodyHash
+        });
+    }
+
+    public async ensureFunctionSummariesForDependencies(nodeIds: string[], allowGenerate: boolean = true): Promise<FunctionSummaryDependencyResult> {
+        await this.indexStatusService.waitForSnapshotReady();
+        await this.ensureLLMSupportReady();
+        return SummaryArrangeService.ensureFunctionSummariesForDependencies(this.projectGraph, nodeIds, undefined, {
+            cacheService: this.summaryCacheService,
+            queueService: this.summaryQueueService,
+            modelService: this.llmModelService,
+            allowGenerate
         });
     }
 

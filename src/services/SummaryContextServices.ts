@@ -16,7 +16,19 @@ export interface FunctionSummaryContext {
     bodyHash: string;
 }
 
+export interface FunctionBatchSummaryContext {
+    fileUri: string;
+    fileName: string;
+    languageId: string;
+    functions: FunctionSummaryContext[];
+}
+
 export class SummaryContextService {
+    public static readonly BATCH_MAX_FUNCTIONS = 8;
+    public static readonly BATCH_MAX_FUNCTION_LINES = 120;
+    public static readonly BATCH_MAX_FUNCTION_CHARS = 6000;
+    public static readonly BATCH_MAX_TOTAL_CHARS = 24000;
+
     public static async buildFunctionContext(graph: ProjectGraph, nodeId: string): Promise<FunctionSummaryContext> {
         const node = graph.getNode(nodeId);
         if (!node) {
@@ -41,6 +53,50 @@ export class SummaryContextService {
             languageId: document.languageId,
             sourceCode,
             bodyHash: this.hashSource(sourceCode)
+        };
+    }
+
+    public static async buildFunctionBatchContext(graph: ProjectGraph, nodeIds: string[]): Promise<FunctionBatchSummaryContext> {
+        const functions: FunctionSummaryContext[] = [];
+        let fileUri = '';
+        let languageId = '';
+        let totalChars = 0;
+
+        for (const nodeId of nodeIds) {
+            const node = graph.getNode(nodeId);
+            if (!node || (node.type !== 'function' && node.type !== 'method') || node.isLibrary || node.placeHolder) {
+                continue;
+            }
+            if (fileUri && node.location.uri !== fileUri) {
+                continue;
+            }
+            if (functions.length >= this.BATCH_MAX_FUNCTIONS) {
+                continue;
+            }
+
+            const context = await this.buildFunctionContext(graph, nodeId);
+            if (!context.sourceCode.trim()) {
+                continue;
+            }
+            const lineCount = context.sourceCode.split(/\r?\n/).length;
+            if (lineCount > this.BATCH_MAX_FUNCTION_LINES || context.sourceCode.length > this.BATCH_MAX_FUNCTION_CHARS) {
+                continue;
+            }
+            if (totalChars + context.sourceCode.length > this.BATCH_MAX_TOTAL_CHARS) {
+                continue;
+            }
+
+            fileUri = node.location.uri;
+            languageId = context.languageId;
+            totalChars += context.sourceCode.length;
+            functions.push(context);
+        }
+
+        return {
+            fileUri,
+            fileName: fileUri ? SourceLocationService.summarizeUri(fileUri) : '',
+            languageId,
+            functions
         };
     }
 

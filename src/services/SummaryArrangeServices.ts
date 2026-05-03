@@ -4,6 +4,7 @@ import { LLMPromptResult, LLMService } from './LLMServices';
 import { LLMModelService } from './LLMModelServices';
 import { SummaryCacheService } from './SummaryCacheServices';
 import { FunctionSummaryContext, SummaryContextService } from './SummaryContextServices';
+import { SummaryJsonSchemaService } from './SummarySchemaServices';
 import { SummaryQueueService } from './SummaryQueueServices';
 import { logger } from '../utils/logger';
 
@@ -18,6 +19,20 @@ export interface SummaryServiceOptions {
     forceRefresh?: boolean;
     allowGenerate?: boolean;
     promptVersion?: string;
+}
+
+export interface FunctionSummaryBatchResult {
+    generated: FunctionSummaryData[];
+    missingNodeIds: string[];
+    invalidNodeIds: string[];
+    promptVersion: string;
+    modelName: string;
+}
+
+export interface FunctionSummaryDependencyResult {
+    summaries: FunctionSummaryData[];
+    missingNodeIds: string[];
+    staleNodeIds: string[];
 }
 
 export class SummaryCacheMissError extends Error {
@@ -44,6 +59,7 @@ export class EmptySummaryError extends Error {
 
 export class SummaryArrangeService {
     public static readonly FUNCTION_PROMPT_VERSION = 'function-summary:v1';
+    public static readonly FUNCTION_BATCH_PROMPT_VERSION = 'function-summary-batch:v1';
 
     public static async summarizeFunction(
         graph: ProjectGraph,
@@ -133,6 +149,181 @@ export class SummaryArrangeService {
             : generate();
     }
 
+    public static async summarizeFunctionsBatch(
+        graph: ProjectGraph,
+        nodeIds: string[],
+        llmClient: SummaryLLMClient = LLMService,
+        options: SummaryServiceOptions = {}
+    ): Promise<FunctionSummaryBatchResult> {
+        const context = await SummaryContextService.buildFunctionBatchContext(graph, nodeIds);
+        const promptVersion = options.promptVersion || this.FUNCTION_BATCH_PROMPT_VERSION;
+        const selectedModel = options.modelService?.getSelectedModel();
+        const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
+        const modelId = selectedModel?.id;
+        const batchNodeIds = context.functions.map(fn => fn.nodeId);
+        const excludedNodeIds = nodeIds.filter(nodeId => !batchNodeIds.includes(nodeId));
+
+        if (context.functions.length === 0) {
+            return {
+                generated: [],
+                missingNodeIds: Array.from(new Set(nodeIds)),
+                invalidNodeIds: [],
+                promptVersion,
+                modelName
+            };
+        }
+
+        const queueKey = [
+            'function-batch',
+            batchNodeIds.slice().sort().join(','),
+            modelName,
+            context.functions.map(fn => fn.bodyHash).sort().join(','),
+            promptVersion
+        ].join('|');
+
+        const generate = async (): Promise<FunctionSummaryBatchResult> => {
+            const prompt = this.buildFunctionBatchSummaryPrompt(context);
+            const response = selectedModel?.model
+                ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
+                : await llmClient.sendPrompt(prompt);
+            const parsed = SummaryJsonSchemaService.parseFunctionSummaryBatchResponse(
+                response.text,
+                new Set(batchNodeIds)
+            );
+            const generatedAt = new Date().toISOString();
+            const contextByNodeId = new Map(context.functions.map(fn => [fn.nodeId, fn]));
+            const generated: FunctionSummaryData[] = [];
+
+            for (const item of parsed.summaries) {
+                const fnContext = contextByNodeId.get(item.nodeId);
+                if (!fnContext) {
+                    continue;
+                }
+
+                const summary: FunctionSummaryData = {
+                    nodeId: fnContext.nodeId,
+                    label: fnContext.label,
+                    summary: item.summary,
+                    modelName,
+                    modelId: response.modelId || modelId,
+                    generatedAt,
+                    bodyHash: fnContext.bodyHash,
+                    promptVersion,
+                    stale: false,
+                    cacheStatus: options.forceRefresh ? 'force-regenerated' : 'generated'
+                };
+                generated.push(options.cacheService
+                    ? await options.cacheService.storeGeneratedFunctionSummary({
+                        ...summary,
+                        modelName,
+                        modelId: summary.modelId,
+                        promptVersion,
+                        bodyHash: fnContext.bodyHash
+                    })
+                    : summary);
+            }
+
+            for (const warning of parsed.warnings) {
+                logger.warn(`[SummaryBackend] batch-json-warning ${warning}`);
+            }
+
+            return {
+                generated,
+                missingNodeIds: Array.from(new Set([...excludedNodeIds, ...parsed.missingNodeIds])),
+                invalidNodeIds: parsed.invalidNodeIds,
+                promptVersion,
+                modelName
+            };
+        };
+
+        return options.queueService
+            ? options.queueService.enqueue(queueKey, generate)
+            : generate();
+    }
+
+    public static async ensureFunctionSummariesForDependencies(
+        graph: ProjectGraph,
+        nodeIds: string[],
+        llmClient: SummaryLLMClient = LLMService,
+        options: SummaryServiceOptions = {}
+    ): Promise<FunctionSummaryDependencyResult> {
+        const selectedModel = options.modelService?.getSelectedModel();
+        const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
+        const contexts = await Promise.all(Array.from(new Set(nodeIds)).map(async nodeId => {
+            try {
+                return await SummaryContextService.buildFunctionContext(graph, nodeId);
+            } catch {
+                return undefined;
+            }
+        }));
+        const validContexts = contexts.filter((context): context is FunctionSummaryContext => context !== undefined);
+        const invalidNodeIds = Array.from(new Set(nodeIds)).filter(nodeId => !validContexts.some(context => context.nodeId === nodeId));
+        const summaries: FunctionSummaryData[] = [];
+        const staleNodeIds: string[] = [];
+        const missingNodeIds = new Set<string>(invalidNodeIds);
+
+        if (options.cacheService) {
+            const cached = await options.cacheService.lookupFunctionSummaries(validContexts.map(context => ({
+                nodeId: context.nodeId,
+                modelName,
+                promptVersion: this.FUNCTION_BATCH_PROMPT_VERSION,
+                fallbackPromptVersions: [this.FUNCTION_PROMPT_VERSION],
+                currentBodyHash: context.bodyHash
+            })));
+            for (const context of validContexts) {
+                const summary = cached.get(context.nodeId);
+                if (summary) {
+                    summaries.push(summary);
+                    if (summary.stale) {
+                        staleNodeIds.push(context.nodeId);
+                    }
+                } else {
+                    missingNodeIds.add(context.nodeId);
+                }
+            }
+        } else {
+            for (const context of validContexts) {
+                missingNodeIds.add(context.nodeId);
+            }
+        }
+
+        if (options.allowGenerate === false || missingNodeIds.size === 0) {
+            return {
+                summaries,
+                missingNodeIds: Array.from(missingNodeIds),
+                staleNodeIds
+            };
+        }
+
+        const missingByUri = new Map<string, string[]>();
+        for (const nodeId of missingNodeIds) {
+            const node = graph.getNode(nodeId);
+            if (!node || (node.type !== 'function' && node.type !== 'method')) {
+                continue;
+            }
+            const ids = missingByUri.get(node.location.uri) || [];
+            ids.push(nodeId);
+            missingByUri.set(node.location.uri, ids);
+        }
+
+        for (const ids of missingByUri.values()) {
+            const batch = await this.summarizeFunctionsBatch(graph, ids, llmClient, {
+                ...options,
+                promptVersion: this.FUNCTION_BATCH_PROMPT_VERSION
+            });
+            for (const summary of batch.generated) {
+                summaries.push(summary);
+                missingNodeIds.delete(summary.nodeId);
+            }
+        }
+
+        return {
+            summaries,
+            missingNodeIds: Array.from(missingNodeIds),
+            staleNodeIds
+        };
+    }
+
     public static buildFunctionSummaryPrompt(context: FunctionSummaryContext): string {
         return [
             '你是一个资深代码阅读助手。请根据给定函数/方法的签名和源码生成简洁 Markdown 摘要。',
@@ -153,6 +344,36 @@ export class SummaryArrangeService {
             context.sourceCode,
             '```'
         ].filter(line => line !== '').join('\n');
+    }
+
+    public static buildFunctionBatchSummaryPrompt(context: Awaited<ReturnType<typeof SummaryContextService.buildFunctionBatchContext>>): string {
+        const sections = context.functions.flatMap(fn => [
+            `FUNCTION_NODE_ID: ${fn.nodeId}`,
+            `FUNCTION_NAME: ${fn.name}`,
+            `SIGNATURE: ${fn.signature}`,
+            'SOURCE:',
+            '```' + this.markdownFenceLanguage(fn.languageId),
+            fn.sourceCode,
+            '```',
+            ''
+        ]);
+
+        return [
+            'You are a senior code reading assistant. Generate concise Markdown summaries for the listed functions.',
+            'Return only valid JSON matching this schema:',
+            SummaryJsonSchemaService.getFunctionBatchSchemaPrompt(),
+            '',
+            'Rules:',
+            '- Include exactly one object per function you can summarize.',
+            '- Use the exact FUNCTION_NODE_ID as nodeId.',
+            '- summary must be a non-empty concise Markdown string.',
+            '- Do not add text outside JSON.',
+            '',
+            `File: ${context.fileName}`,
+            `Language: ${context.languageId}`,
+            '',
+            ...sections
+        ].join('\n');
     }
 
     private static markdownFenceLanguage(languageId: string): string {

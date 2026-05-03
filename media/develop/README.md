@@ -106,7 +106,8 @@ Queries return immediately after the backend snapshot is loaded. If the analysis
 ## Function Summary Shell
 
 - The debug command `forwarder.debug.summarizeActiveFunction` resolves the function or method under the editor cursor and uses the same cache-first summary query path as the Webview.
-- Function summaries use only the function name, signature, file/language, and source code range. Call graph context, class summaries, path summaries, batch JSON schema generation, and Graph-RAG inputs remain reserved for later work.
+- Function summaries use only the function name, signature, file/language, and source code range. Call graph context, class summaries, path summaries, and Graph-RAG inputs remain reserved for later work.
+- Dependency-driven summaries can prefill short same-file function summaries in batches. The backend asks the LLM for a JSON object shaped as `{ "summaries": [{ "nodeId": string, "summary": string }] }`, validates it locally, and stores each valid result in that function's target body. Batch generation is reserved for class/call summary dependency preparation and is not triggered by the current single-function long-press gesture.
 - Summary storage is separated from graph snapshots. Startup loads `summaries/summary_index.json`; summary bodies in `summaries/bodies/` are lazy-loaded only when a cache hit is actually displayed or queried.
 - Cache matching is keyed by target, configured model display name, prompt version, and function body hash. Stale summaries are still displayable and are marked in the popover; stale does not trigger automatic regeneration unless the user explicitly refreshes.
 - The backend keeps at most the latest three successful records for each function/model/prompt combination. `SummaryQueueServices` merges identical pending requests and limits generation concurrency.
