@@ -881,6 +881,17 @@ body {
     font-weight: 700;
 }
 
+.summary-relation-stale-badge {
+    flex: 0 0 auto;
+    border: 1px solid rgba(91, 141, 239, 0.42);
+    border-radius: 999px;
+    padding: 2px 6px;
+    color: #c9d8ff;
+    background: rgba(91, 141, 239, 0.16);
+    font-size: 9px;
+    font-weight: 700;
+}
+
 .summary-popover-body {
     display: grid;
     gap: 7px;

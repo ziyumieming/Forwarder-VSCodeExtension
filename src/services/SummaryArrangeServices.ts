@@ -1,9 +1,9 @@
-import { FunctionSummaryData } from '../models/GraphDefinition';
+import { ClassSummaryData, FunctionSummaryData } from '../models/GraphDefinition';
 import { ProjectGraph } from '../models/GraphManager';
 import { LLMPromptResult, LLMService } from './LLMServices';
 import { LLMModelService } from './LLMModelServices';
 import { SummaryCacheService } from './SummaryCacheServices';
-import { FunctionSummaryContext, SummaryContextService } from './SummaryContextServices';
+import { ClassSummaryContext, FunctionSummaryContext, RelatedClassContext, SummaryContextService } from './SummaryContextServices';
 import { SummaryJsonSchemaService } from './SummarySchemaServices';
 import { SummaryQueueService } from './SummaryQueueServices';
 import { logger } from '../utils/logger';
@@ -60,6 +60,9 @@ export class EmptySummaryError extends Error {
 export class SummaryArrangeService {
     public static readonly FUNCTION_PROMPT_VERSION = 'function-summary:v1';
     public static readonly FUNCTION_BATCH_PROMPT_VERSION = 'function-summary-batch:v1';
+    public static readonly CLASS_PROMPT_VERSION = 'class-summary:v1';
+    public static readonly CLASS_RELATION_BRIEF_PROMPT_VERSION = 'class-relation-brief:v1';
+    private static readonly MAX_RELATION_BRIEFS = 3;
 
     public static async summarizeFunction(
         graph: ProjectGraph,
@@ -324,6 +327,168 @@ export class SummaryArrangeService {
         };
     }
 
+    public static async summarizeClassRelationBrief(
+        graph: ProjectGraph,
+        nodeId: string,
+        llmClient: SummaryLLMClient = LLMService,
+        options: SummaryServiceOptions = {}
+    ): Promise<ClassSummaryData> {
+        const selectedModel = options.modelService?.getSelectedModel();
+        const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
+        const modelId = selectedModel?.id;
+        const context = await SummaryContextService.buildClassContext(graph, nodeId);
+        const promptVersion = options.promptVersion || this.CLASS_RELATION_BRIEF_PROMPT_VERSION;
+
+        if (options.cacheService && !options.forceRefresh) {
+            const cached = await options.cacheService.lookupSummary({
+                nodeId,
+                targetKind: 'class',
+                modelName,
+                promptVersion,
+                currentBodyHash: context.ownContextHash,
+                currentRelationContextHash: context.relationContextHash
+            });
+            if (cached) {
+                return cached as ClassSummaryData;
+            }
+        }
+
+        if (options.allowGenerate === false) {
+            throw new SummaryCacheMissError(nodeId, modelName, promptVersion);
+        }
+
+        const generate = async (): Promise<ClassSummaryData> => {
+            const prompt = this.buildClassRelationBriefPrompt(context);
+            const response = selectedModel?.model
+                ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
+                : await llmClient.sendPrompt(prompt);
+            const summaryText = String(response.text || '').trim();
+            if (!summaryText) {
+                throw new EmptySummaryError(nodeId, modelName, 0);
+            }
+            const generated: ClassSummaryData = {
+                nodeId,
+                label: context.label,
+                summary: summaryText,
+                modelName,
+                modelId: response.modelId || modelId,
+                generatedAt: new Date().toISOString(),
+                bodyHash: context.ownContextHash,
+                relationContextHash: context.relationContextHash,
+                promptVersion,
+                stale: false,
+                ownStale: false,
+                relationContextStale: false,
+                contextCoverage: context.contextCoverage,
+                usedContextNodeIds: [],
+                missingContextNodeIds: context.relatedClasses.map(related => related.nodeId),
+                cacheStatus: options.forceRefresh ? 'force-regenerated' : 'generated'
+            };
+            return options.cacheService
+                ? await options.cacheService.storeGeneratedSummary('class', {
+                    ...generated,
+                    modelName,
+                    promptVersion,
+                    bodyHash: context.ownContextHash
+                }) as ClassSummaryData
+                : generated;
+        };
+
+        const queueKey = ['class-brief', nodeId, modelName, context.ownContextHash, context.relationContextHash, promptVersion].join('|');
+        return options.queueService ? options.queueService.enqueue(queueKey, generate) : generate();
+    }
+
+    public static async summarizeClass(
+        graph: ProjectGraph,
+        nodeId: string,
+        llmClient: SummaryLLMClient = LLMService,
+        options: SummaryServiceOptions = {}
+    ): Promise<ClassSummaryData> {
+        const selectedModel = options.modelService?.getSelectedModel();
+        const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
+        const modelId = selectedModel?.id;
+        const baseContext = await SummaryContextService.buildClassContext(graph, nodeId);
+        const methodSummaryResult = await this.ensureFunctionSummariesForDependencies(
+            graph,
+            baseContext.methods.map(method => method.id),
+            llmClient,
+            options
+        );
+        const methodSummaries = new Map(methodSummaryResult.summaries.map(summary => [summary.nodeId, summary]));
+        const contextWithMethods = await SummaryContextService.buildClassContext(graph, nodeId, { methodSummaries });
+        const relatedBriefs = await this.ensureRelationBriefs(graph, contextWithMethods.relatedClasses, llmClient, options);
+        const context = await SummaryContextService.buildClassContext(graph, nodeId, {
+            methodSummaries,
+            relatedBriefs
+        });
+        const promptVersion = options.promptVersion || this.CLASS_PROMPT_VERSION;
+
+        if (options.cacheService && !options.forceRefresh) {
+            const cached = await options.cacheService.lookupSummary({
+                nodeId,
+                targetKind: 'class',
+                modelName,
+                promptVersion,
+                currentBodyHash: context.ownContextHash,
+                currentRelationContextHash: context.relationContextHash
+            });
+            if (cached) {
+                return cached as ClassSummaryData;
+            }
+        }
+
+        if (options.allowGenerate === false) {
+            throw new SummaryCacheMissError(nodeId, modelName, promptVersion);
+        }
+
+        const generate = async (): Promise<ClassSummaryData> => {
+            const prompt = this.buildClassSummaryPrompt(context);
+            const response = selectedModel?.model
+                ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
+                : await llmClient.sendPrompt(prompt);
+            const summaryText = String(response.text || '').trim();
+            if (!summaryText) {
+                throw new EmptySummaryError(nodeId, modelName, 0);
+            }
+            const usedContextNodeIds = context.relatedClasses
+                .filter(related => related.confidence !== 'name-only')
+                .map(related => related.nodeId);
+            const missingContextNodeIds = context.relatedClasses
+                .filter(related => related.confidence === 'name-only')
+                .map(related => related.nodeId);
+            const generated: ClassSummaryData = {
+                nodeId,
+                label: context.label,
+                summary: summaryText,
+                modelName,
+                modelId: response.modelId || modelId,
+                generatedAt: new Date().toISOString(),
+                bodyHash: context.ownContextHash,
+                relationContextHash: context.relationContextHash,
+                promptVersion,
+                stale: false,
+                ownStale: false,
+                relationContextStale: false,
+                contextCoverage: context.contextCoverage,
+                usedContextNodeIds,
+                missingContextNodeIds,
+                cacheStatus: options.forceRefresh ? 'force-regenerated' : 'generated'
+            };
+            return options.cacheService
+                ? await options.cacheService.storeGeneratedSummary('class', {
+                    ...generated,
+                    modelName,
+                    promptVersion,
+                    bodyHash: context.ownContextHash,
+                    relationContextHash: context.relationContextHash
+                }) as ClassSummaryData
+                : generated;
+        };
+
+        const queueKey = ['class-summary', nodeId, modelName, context.ownContextHash, context.relationContextHash, promptVersion].join('|');
+        return options.queueService ? options.queueService.enqueue(queueKey, generate) : generate();
+    }
+
     public static buildFunctionSummaryPrompt(context: FunctionSummaryContext): string {
         return [
             '你是一个资深代码阅读助手。请根据给定函数/方法的签名和源码生成简洁 Markdown 摘要。',
@@ -374,6 +539,103 @@ export class SummaryArrangeService {
             '',
             ...sections
         ].join('\n');
+    }
+
+    public static buildClassRelationBriefPrompt(context: ClassSummaryContext): string {
+        return [
+            'Relation brief: summarize this class for use as context in another class summary.',
+            'Return 1-3 concise sentences. Do not use Markdown headings.',
+            '',
+            `Class: ${context.name}`,
+            context.namespace ? `Namespace: ${context.namespace}` : '',
+            `File: ${context.fileName}`,
+            '',
+            'Fields:',
+            ...context.fields.map(field => `- ${field.signature || [field.name, field.type].filter(Boolean).join(': ')}`),
+            '',
+            'Methods:',
+            ...context.methods.map(method => `- ${method.signature || method.name}`),
+            '',
+            `Existing method summary coverage: ${context.contextCoverage.methodSummaryCount || 0}/${context.contextCoverage.methodCount || 0}`,
+            '',
+            'Related class names are low-confidence structure hints only:',
+            ...context.relatedClasses.map(related => `- ${related.label} [${related.relationTypes.join(', ')}]`)
+        ].filter(line => line !== '').join('\n');
+    }
+
+    public static buildClassSummaryPrompt(context: ClassSummaryContext): string {
+        return [
+            'You are a senior code reading assistant. Generate a class summary that explains the role of this class in the project.',
+            '',
+            'Output exactly these Markdown sections:',
+            '### 职责定位',
+            '### 核心状态',
+            '### 主要行为',
+            '### 协作关系',
+            '',
+            'Rules:',
+            '- Field names are weak evidence. Use them with method summaries and typed relations.',
+            '- Related classes without summaries are low-confidence structural hints only.',
+            '- Do not invent internals for unsummarized related classes.',
+            '',
+            `Class: ${context.name}`,
+            context.namespace ? `Namespace: ${context.namespace}` : '',
+            `File: ${context.fileName}`,
+            '',
+            'Fields:',
+            ...context.fields.map(field => `- ${field.signature || [field.name, field.type].filter(Boolean).join(': ')}`),
+            '',
+            'Methods and summaries:',
+            ...context.methods.map(method => `- ${method.signature || method.name}${method.summary ? ` — ${method.summary}` : ' — no summary available'}`),
+            '',
+            'Related classes with summaries:',
+            ...context.summarizedRelatedClasses.map(related => `- ${related.label} [${related.relationTypes.join(', ')}]: ${related.summary}`),
+            '',
+            'Related class briefs:',
+            ...context.relationBriefs.map(related => `- ${related.label} [${related.relationTypes.join(', ')}]: ${related.brief}`),
+            '',
+            'Unsummarized related classes (low confidence names only):',
+            ...context.unsummarizedRelatedClasses.map(related => `- ${related.label} [${related.relationTypes.join(', ')}]`)
+        ].filter(line => line !== '').join('\n');
+    }
+
+    private static async ensureRelationBriefs(
+        graph: ProjectGraph,
+        relatedClasses: RelatedClassContext[],
+        llmClient: SummaryLLMClient,
+        options: SummaryServiceOptions
+    ): Promise<Map<string, FunctionSummaryData>> {
+        const briefs = new Map<string, FunctionSummaryData>();
+        const selected = relatedClasses.slice(0, this.MAX_RELATION_BRIEFS);
+        const selectedModel = options.modelService?.getSelectedModel();
+        const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
+        for (const related of selected) {
+            const relatedContext = await SummaryContextService.buildClassContext(graph, related.nodeId);
+            const existing = options.cacheService
+                ? await options.cacheService.lookupSummary({
+                    nodeId: related.nodeId,
+                    targetKind: 'class',
+                    modelName,
+                    promptVersion: this.CLASS_RELATION_BRIEF_PROMPT_VERSION,
+                    fallbackPromptVersions: [this.CLASS_PROMPT_VERSION],
+                    currentBodyHash: relatedContext.ownContextHash,
+                    currentRelationContextHash: relatedContext.relationContextHash
+                })
+                : undefined;
+            if (existing) {
+                briefs.set(related.nodeId, existing);
+                continue;
+            }
+            if (options.allowGenerate === false) {
+                continue;
+            }
+            const brief = await this.summarizeClassRelationBrief(graph, related.nodeId, llmClient, {
+                ...options,
+                promptVersion: this.CLASS_RELATION_BRIEF_PROMPT_VERSION
+            });
+            briefs.set(related.nodeId, brief);
+        }
+        return briefs;
     }
 
     private static markdownFenceLanguage(languageId: string): string {

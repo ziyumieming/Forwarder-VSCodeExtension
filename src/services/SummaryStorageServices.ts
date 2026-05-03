@@ -15,6 +15,10 @@ export interface SummaryIndexRecord {
     promptVersion: string;
     bodyHash: string;
     generatedAt: string;
+    relationContextHash?: string;
+    contextCoverage?: any;
+    usedContextNodeIds?: string[];
+    missingContextNodeIds?: string[];
 }
 
 export interface SummaryBodyRecord {
@@ -25,6 +29,10 @@ export interface SummaryBodyRecord {
     bodyHash: string;
     generatedAt: string;
     summary: string;
+    relationContextHash?: string;
+    contextCoverage?: any;
+    usedContextNodeIds?: string[];
+    missingContextNodeIds?: string[];
 }
 
 export interface SummaryTargetBody {
@@ -311,7 +319,11 @@ export class SummaryStorageService {
             modelName: record.modelName,
             promptVersion: record.promptVersion,
             bodyHash: record.bodyHash,
-            generatedAt: record.generatedAt
+            generatedAt: record.generatedAt,
+            relationContextHash: record.relationContextHash,
+            contextCoverage: record.contextCoverage,
+            usedContextNodeIds: record.usedContextNodeIds,
+            missingContextNodeIds: record.missingContextNodeIds
         };
     }
 
@@ -323,7 +335,11 @@ export class SummaryStorageService {
             promptVersion: record.promptVersion,
             bodyHash: record.bodyHash,
             generatedAt: record.generatedAt,
-            summary: record.summary
+            summary: record.summary,
+            relationContextHash: record.relationContextHash,
+            contextCoverage: record.contextCoverage,
+            usedContextNodeIds: record.usedContextNodeIds,
+            missingContextNodeIds: record.missingContextNodeIds
         };
     }
 
@@ -335,7 +351,11 @@ export class SummaryStorageService {
             promptVersion: String(record.promptVersion || ''),
             bodyHash: String(record.bodyHash || ''),
             generatedAt: String(record.generatedAt || ''),
-            summary: String(record.summary || '')
+            summary: String(record.summary || ''),
+            relationContextHash: record.relationContextHash ? String(record.relationContextHash) : undefined,
+            contextCoverage: record.contextCoverage,
+            usedContextNodeIds: Array.isArray(record.usedContextNodeIds) ? record.usedContextNodeIds.map(String) : undefined,
+            missingContextNodeIds: Array.isArray(record.missingContextNodeIds) ? record.missingContextNodeIds.map(String) : undefined
         };
     }
 

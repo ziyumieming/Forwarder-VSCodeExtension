@@ -108,11 +108,16 @@
                 hideTimer = null;
             }
 
+            var staleBadges = [
+                (record.stale || record.ownStale) ? '<span class="summary-stale-badge" title="Source changed after this summary was generated">STALE</span>' : '',
+                record.relationContextStale ? '<span class="summary-relation-stale-badge" title="Related class context changed after this summary was generated">RELATION STALE</span>' : ''
+            ].join('');
+
             root.innerHTML = [
                 '<div class="summary-popover-head">',
                 '<button class="summary-popover-nav" type="button" data-summary-action="prev-model" title="Previous model cache">&lt;</button>',
                 '<div class="summary-popover-title">' + escapeHtml(record.label || record.nodeId) + '</div>',
-                record.stale ? '<span class="summary-stale-badge" title="Source changed after this summary was generated">STALE</span>' : '',
+                staleBadges,
                 '<button class="summary-popover-nav" type="button" data-summary-action="next-model" title="Next model cache">&gt;</button>',
                 '</div>',
                 '<div class="summary-popover-body">' + renderMarkdownSubset(record.summary) + '</div>',

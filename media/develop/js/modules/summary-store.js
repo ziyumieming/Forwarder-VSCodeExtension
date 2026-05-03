@@ -37,7 +37,13 @@
             cacheStatus: record.cacheStatus ? String(record.cacheStatus) : '',
             historyIndex: Number.isFinite(record.historyIndex) ? record.historyIndex : 0,
             historyCount: Number.isFinite(record.historyCount) ? record.historyCount : 1,
-            promptVersion: record.promptVersion ? String(record.promptVersion) : ''
+            promptVersion: record.promptVersion ? String(record.promptVersion) : '',
+            summaryKind: record.summaryKind ? String(record.summaryKind) : (String(record.promptVersion || '').startsWith('class-') ? 'class' : 'function'),
+            ownStale: record.ownStale === true,
+            relationContextStale: record.relationContextStale === true,
+            contextCoverage: record.contextCoverage || null,
+            usedContextNodeIds: Array.isArray(record.usedContextNodeIds) ? record.usedContextNodeIds.map(String) : [],
+            missingContextNodeIds: Array.isArray(record.missingContextNodeIds) ? record.missingContextNodeIds.map(String) : []
         };
     }
 

@@ -4,7 +4,7 @@ import { AdapterService } from './AdapterServices';
 import { CallGraphDirection, ViewQueryService } from './ViewServices';
 import { SynchronizationService } from './SynchronizationServices';
 import { GatingService } from './GatingServices';
-import { AnalysisIndexStatus, EdgeRelation, FunctionRef, FunctionSummaryData, GraphNodeRef, GraphViewData, NodeType, SourceLocationTarget } from '../models/GraphDefinition';
+import { AnalysisIndexStatus, ClassSummaryData, EdgeRelation, FunctionRef, FunctionSummaryData, GraphNodeRef, GraphViewData, NodeType, SourceLocationTarget } from '../models/GraphDefinition';
 import { SourceLocationService } from './SourceLocationServices';
 import { AnalysisIndexStatusService } from './StatusServices';
 import { logger } from '../utils/logger';
@@ -518,6 +518,21 @@ export class AnalysisRuntime {
             allowGenerate
         });
         // logger.info(`[SummaryBackend] backend-cache-hit completed nodeId=${nodeId}, status=${result.cacheStatus}, stale=${result.stale === true}, model=${result.modelName || result.modelId || '<unknown>'}, reason=${reason}, summaryType=${typeof result.summary}, summaryLength=${String(result.summary || '').length}`);
+        return result;
+    }
+
+    public async queryClassSummary(nodeId: string, forceRefresh: boolean = false, allowGenerate: boolean = true, reason: string = 'unknown'): Promise<ClassSummaryData> {
+        await this.indexStatusService.waitForSnapshotReady();
+        await this.ensureLLMSupportReady();
+
+        const result = await SummaryArrangeService.summarizeClass(this.projectGraph, nodeId, undefined, {
+            cacheService: this.summaryCacheService,
+            queueService: this.summaryQueueService,
+            modelService: this.llmModelService,
+            forceRefresh,
+            allowGenerate
+        });
+        logger.info(`[SummaryBackend] class-summary-query completed nodeId=${nodeId}, status=${result.cacheStatus}, ownStale=${result.ownStale === true}, relationStale=${result.relationContextStale === true}, reason=${reason}`);
         return result;
     }
 

@@ -61,6 +61,24 @@ export interface FunctionSummaryData {
     promptVersion?: string;
 }
 
+export interface SummaryContextCoverage {
+    totalRelatedNodes: number;
+    summarizedRelatedNodes: number;
+    briefRelatedNodes: number;
+    unsummarizedRelatedNodes: number;
+    methodSummaryCount?: number;
+    methodCount?: number;
+}
+
+export interface ClassSummaryData extends FunctionSummaryData {
+    ownStale?: boolean;
+    relationContextStale?: boolean;
+    relationContextHash?: string;
+    contextCoverage?: SummaryContextCoverage;
+    usedContextNodeIds?: string[];
+    missingContextNodeIds?: string[];
+}
+
 export interface GraphNodeRef {
     id: string;
     label: string;

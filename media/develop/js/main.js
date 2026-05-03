@@ -162,7 +162,7 @@
                             allowGenerate: true
                         });
                         vscode.postMessage({
-                            command: 'queryFunctionSummary',
+                            command: getSummaryQueryCommand(record.nodeId, record),
                             nodeId: record.nodeId,
                             forceRefresh: true,
                             allowGenerate: true,
@@ -174,6 +174,22 @@
         }
 
         return summaryPopover;
+    }
+
+    function getSummaryQueryCommand(nodeId, record) {
+        if (record && record.summaryKind === 'class') {
+            return 'queryClassSummary';
+        }
+        if (record && String(record.promptVersion || '').startsWith('class-')) {
+            return 'queryClassSummary';
+        }
+        const node = nodeId && cy && typeof cy.getElementById === 'function'
+            ? cy.getElementById(String(nodeId))
+            : null;
+        const kind = node && node.length > 0 ? getNodeKind(node) : '';
+        return kind === 'class' || kind === 'interface'
+            ? 'queryClassSummary'
+            : 'queryFunctionSummary';
     }
 
     function showSummaryForNodeId(nodeId, point, source) {
@@ -230,7 +246,7 @@
             allowGenerate: false
         });
         vscode.postMessage({
-            command: 'queryFunctionSummary',
+            command: getSummaryQueryCommand(nodeId),
             nodeId,
             forceRefresh: false,
             allowGenerate: false,
@@ -784,7 +800,15 @@
                 });
                 pulseSummaryNode(node);
                 if (kind === 'class' || kind === 'interface') {
-                    log('summary', 'info', '[SummaryUI] long-press-triggered class-summary-reserved', { nodeId, kind, reason: 'long-press' });
+                    summaryRequestAnchors.set(nodeId, getSummaryNodePopoverPoint(nodeId) || getSummaryNodeAnchorPoint(nodeId) || point);
+                    log('summary', 'info', '[SummaryUI] long-press-triggered class-summary', { nodeId, kind, reason: 'long-press' });
+                    vscode.postMessage({
+                        command: 'queryClassSummary',
+                        nodeId,
+                        forceRefresh: true,
+                        allowGenerate: true,
+                        reason: 'long-press'
+                    });
                     return;
                 }
                 if (!isFunctionSummaryTarget(node)) {
@@ -1463,6 +1487,14 @@
                 if (relationGraphTab && typeof relationGraphTab.onHeaderAction === 'function') {
                     relationGraphTab.onHeaderAction(nodeId);
                 }
+                summaryRequestAnchors.set(nodeId, getSummaryNodeAnchorPoint(nodeId) || { x: 88, y: 88 });
+                vscode.postMessage({
+                    command: 'queryClassSummary',
+                    nodeId,
+                    forceRefresh: true,
+                    allowGenerate: true,
+                    reason: 'center-card-header'
+                });
             },
             onSectionToggle: (sectionToggle) => {
                 const sectionName = sectionToggle.dataset.cardSection;
@@ -2298,7 +2330,13 @@
                     cacheStatus: data.cacheStatus,
                     historyIndex: data.historyIndex,
                     historyCount: data.historyCount,
-                    promptVersion: data.promptVersion
+                    promptVersion: data.promptVersion,
+                    summaryKind: data.summaryKind || (String(data.promptVersion || '').startsWith('class-') ? 'class' : 'function'),
+                    ownStale: data.ownStale === true,
+                    relationContextStale: data.relationContextStale === true,
+                    contextCoverage: data.contextCoverage || null,
+                    usedContextNodeIds: Array.isArray(data.usedContextNodeIds) ? data.usedContextNodeIds : [],
+                    missingContextNodeIds: Array.isArray(data.missingContextNodeIds) ? data.missingContextNodeIds : []
                 }, 'backend');
                 log('summary', stored ? 'info' : 'error', stored ? '[SummaryUI] backend-cache-hit stored' : '[SummaryUI] popover-hidden-or-empty', {
                     nodeId: data.nodeId,
@@ -2315,10 +2353,12 @@
                         : 0
                 });
                 if (stored) {
-                    vscode.postMessage({
-                        command: 'getFunctionSummaryHistory',
-                        nodeId: data.nodeId
-                    });
+                    if (stored.summaryKind !== 'class') {
+                        vscode.postMessage({
+                            command: 'getFunctionSummaryHistory',
+                            nodeId: data.nodeId
+                        });
+                    }
                     const popover = ensureSummaryPopover();
                     if (popover && typeof popover.show === 'function') {
                         const anchorPoint = summaryRequestAnchors.get(data.nodeId)

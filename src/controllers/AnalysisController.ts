@@ -159,6 +159,44 @@ export class AnalysisController {
                 break;
             }
 
+            case 'queryClassSummary': {
+                const allowGenerate = data.allowGenerate !== false;
+                const reason = String(data.reason || 'unknown');
+                logger.info(`[SummaryBackend] class-summary-query controller nodeId=${data.nodeId}, forceRefresh=${data.forceRefresh === true}, allowGenerate=${allowGenerate}, reason=${reason}`);
+                try {
+                    const summary = await this.runtime.queryClassSummary(
+                        String(data.nodeId || ''),
+                        data.forceRefresh === true,
+                        allowGenerate,
+                        reason
+                    );
+                    this.provider.postMessage({
+                        command: 'functionSummaryData',
+                        reason,
+                        summaryKind: 'class',
+                        ...summary
+                    });
+                } catch (error: any) {
+                    if (error instanceof SummaryCacheMissError) {
+                        this.provider.postMessage({
+                            command: 'functionSummaryMiss',
+                            nodeId: data.nodeId,
+                            reason,
+                            allowGenerate,
+                            forceRefresh: data.forceRefresh === true
+                        });
+                        break;
+                    }
+                    this.provider.postMessage({
+                        command: 'functionSummaryError',
+                        nodeId: data.nodeId,
+                        reason,
+                        message: error?.message || String(error)
+                    });
+                }
+                break;
+            }
+
             case 'getFunctionSummaryHistory': {
                 try {
                     logger.info(`[AnalysisController] getFunctionSummaryHistory nodeId=${data.nodeId}, modelName=${data.modelName || '*'}`);
