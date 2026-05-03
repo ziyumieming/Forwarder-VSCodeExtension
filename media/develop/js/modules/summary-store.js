@@ -113,9 +113,6 @@
         records.sort(function (left, right) {
             return String(right.generatedAt || '').localeCompare(String(left.generatedAt || ''));
         });
-        if (records.length > 3) {
-            records = records.slice(0, 3);
-        }
         records = records.map(function (item, index) {
             return {
                 ...item,

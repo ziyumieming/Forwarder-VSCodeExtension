@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import { ClassSummaryData, FunctionSummaryData, SummaryContextCoverage } from '../models/GraphDefinition';
 import { logger } from '../utils/logger';
 import { SummaryBodyRecord, SummaryStorageService, SummaryStoredRecord, SummaryTargetKind } from './SummaryStorageServices';
+import { SummaryConfigService } from './SummaryConfigServices';
 import { SummaryLanguage } from './UiLanguageServices';
 
 export interface SummaryLookupRequest {
@@ -44,8 +45,14 @@ export type GeneratedSummaryRecord = GeneratedFunctionSummaryRecord | GeneratedC
 
 export class SummaryCacheService {
     private readonly targetRecordCache = new Map<string, SummaryBodyRecord[]>();
+    private readonly historyLimit: number;
 
-    constructor(private readonly storage: SummaryStorageService) { }
+    constructor(private readonly storage: SummaryStorageService, options: { historyLimit?: number } = {}) {
+        const limit = Number(options.historyLimit);
+        this.historyLimit = Number.isFinite(limit)
+            ? Math.min(10, Math.max(1, Math.round(limit)))
+            : SummaryConfigService.DEFAULTS.history.limit;
+    }
 
     public async lookupFunctionSummary(request: SummaryLookupRequest): Promise<FunctionSummaryData | undefined> {
         const normalizedRequest = this.normalizeLookupRequest(request);
@@ -289,7 +296,7 @@ export class SummaryCacheService {
                 && record.promptVersion === promptVersion
                 && record.summaryLanguage === summaryLanguage)
             .sort((left, right) => right.generatedAt.localeCompare(left.generatedAt));
-        const staleKeys = new Set(matching.slice(3).map(record => record.recordKey));
+        const staleKeys = new Set(matching.slice(this.historyLimit).map(record => record.recordKey));
         if (staleKeys.size === 0) {
             return;
         }

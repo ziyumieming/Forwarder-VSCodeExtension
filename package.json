@@ -151,6 +151,48 @@
           "maximum": 4,
           "description": "%forwarder.configuration.llm.summaryConcurrency.description%"
         },
+        "forwarder.llm.classRelationBriefTopK": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "%forwarder.configuration.llm.classRelationBriefTopK.description%"
+        },
+        "forwarder.llm.functionBatchMaxFunctions": {
+          "type": "number",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "%forwarder.configuration.llm.functionBatchMaxFunctions.description%"
+        },
+        "forwarder.llm.functionBatchMaxFunctionLines": {
+          "type": "number",
+          "default": 120,
+          "minimum": 10,
+          "maximum": 500,
+          "description": "%forwarder.configuration.llm.functionBatchMaxFunctionLines.description%"
+        },
+        "forwarder.llm.functionBatchMaxFunctionChars": {
+          "type": "number",
+          "default": 6000,
+          "minimum": 500,
+          "maximum": 30000,
+          "description": "%forwarder.configuration.llm.functionBatchMaxFunctionChars.description%"
+        },
+        "forwarder.llm.functionBatchMaxTotalChars": {
+          "type": "number",
+          "default": 24000,
+          "minimum": 1000,
+          "maximum": 100000,
+          "description": "%forwarder.configuration.llm.functionBatchMaxTotalChars.description%"
+        },
+        "forwarder.llm.summaryHistoryLimit": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "%forwarder.configuration.llm.summaryHistoryLimit.description%"
+        },
         "forwarder.llm.longPressMs": {
           "type": "number",
           "default": 650,

@@ -8,6 +8,7 @@ import { SummaryJsonSchemaService } from './SummarySchemaServices';
 import { SummaryQueueService } from './SummaryQueueServices';
 import { logger } from '../utils/logger';
 import { PromptLanguageService, SummaryLanguage } from './UiLanguageServices';
+import { SummaryConfigService, SummaryRuntimeConfig } from './SummaryConfigServices';
 
 export interface SummaryLLMClient {
     sendPrompt(prompt: string): Promise<LLMPromptResult>;
@@ -21,6 +22,7 @@ export interface SummaryServiceOptions {
     allowGenerate?: boolean;
     promptVersion?: string;
     summaryLanguage?: SummaryLanguage;
+    summaryConfig?: SummaryRuntimeConfig;
 }
 
 export interface FunctionSummaryBatchResult {
@@ -82,10 +84,12 @@ export class SummaryArrangeService {
     public static readonly CLASS_PROMPT_VERSION = 'class-summary:v1';
     public static readonly CLASS_RELATION_BRIEF_PROMPT_VERSION = 'class-relation-brief:v1';
     public static readonly CALL_PATH_PROMPT_VERSION = 'call-path-summary:v1';
-    private static readonly MAX_RELATION_BRIEFS = 3;
-
     private static resolveSummaryLanguage(options: SummaryServiceOptions = {}): SummaryLanguage {
         return PromptLanguageService.normalize(options.summaryLanguage);
+    }
+
+    private static resolveSummaryConfig(options: SummaryServiceOptions = {}): SummaryRuntimeConfig {
+        return options.summaryConfig || SummaryConfigService.DEFAULTS;
     }
 
     public static async summarizeFunction(
@@ -187,7 +191,8 @@ export class SummaryArrangeService {
         llmClient: SummaryLLMClient = LLMService,
         options: SummaryServiceOptions = {}
     ): Promise<FunctionSummaryBatchResult> {
-        const context = await SummaryContextService.buildFunctionBatchContext(graph, nodeIds);
+        const summaryConfig = this.resolveSummaryConfig(options);
+        const context = await SummaryContextService.buildFunctionBatchContext(graph, nodeIds, summaryConfig.batch);
         const promptVersion = options.promptVersion || this.FUNCTION_BATCH_PROMPT_VERSION;
         const selectedModel = options.modelService?.getSelectedModel();
         const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
@@ -665,7 +670,8 @@ export class SummaryArrangeService {
         options: SummaryServiceOptions
     ): Promise<Map<string, FunctionSummaryData>> {
         const briefs = new Map<string, FunctionSummaryData>();
-        const selected = relatedClasses.slice(0, this.MAX_RELATION_BRIEFS);
+        const summaryConfig = this.resolveSummaryConfig(options);
+        const selected = relatedClasses.slice(0, summaryConfig.classContext.relationBriefTopK);
         const selectedModel = options.modelService?.getSelectedModel();
         const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
         const summaryLanguage = this.resolveSummaryLanguage(options);

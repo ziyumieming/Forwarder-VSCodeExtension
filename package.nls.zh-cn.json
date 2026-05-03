@@ -1,7 +1,7 @@
 {
   "forwarder.commands.analyze0": "启动 Forwarder",
   "forwarder.commands.analyze": "Forwarder：分析当前文件",
-  "forwarder.commands.addFunctionToCallPath": "Forwarder：将函数加入调用链",
+  "forwarder.commands.addFunctionToCallPath": "Forwarder：将函数加入调用路径",
   "forwarder.commands.setFunctionAsCallCenter": "Forwarder：设为调用图中心函数",
   "forwarder.commands.debug.analyze": "调试：诊断分析流程",
   "forwarder.commands.debug.lspTypeHierarchy": "调试：诊断 LSP 类型层级",
@@ -17,6 +17,12 @@
   "forwarder.configuration.analysis.excludePattern.description": "结构扫描时需要排除的文件夹和文件 Glob 模式。",
   "forwarder.configuration.llm.defaultModelName.description": "默认使用的 LLM 模型显示名称。留空时使用第一个可用模型。",
   "forwarder.configuration.llm.summaryConcurrency.description": "摘要生成队列的最大并发数。",
+  "forwarder.configuration.llm.classRelationBriefTopK.description": "生成类摘要时最多为多少个相关类补齐关系简述。设为 0 可禁用关系简述补齐。",
+  "forwarder.configuration.llm.functionBatchMaxFunctions.description": "单次批量函数摘要请求中最多包含的函数数量。",
+  "forwarder.configuration.llm.functionBatchMaxFunctionLines.description": "批量函数摘要请求中每个函数最多包含的源码行数。",
+  "forwarder.configuration.llm.functionBatchMaxFunctionChars.description": "批量函数摘要请求中每个函数最多包含的源码字符数。",
+  "forwarder.configuration.llm.functionBatchMaxTotalChars.description": "单次批量函数摘要请求中所有函数源码的最大总字符数。",
+  "forwarder.configuration.llm.summaryHistoryLimit.description": "同一目标、模型、提示词版本和语言下保留的成功摘要历史数量。",
   "forwarder.configuration.llm.longPressMs.description": "在图节点上长按触发摘要查询所需的时间阈值（毫秒）。",
   "forwarder.configuration.llm.summaryHoverDelayMs.description": "悬停已有摘要节点后显示摘要卡片的延迟时间（毫秒）。"
 }

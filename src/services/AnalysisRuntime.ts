@@ -16,6 +16,7 @@ import { LLMModelInfo, LLMModelService } from './LLMModelServices';
 import { SummaryContextService } from './SummaryContextServices';
 import { AnalysisTask, GraphAnalysisQueueService } from './GraphQueueServices';
 import { PromptLanguageService, SummaryLanguage } from './UiLanguageServices';
+import { SummaryConfigService, SummaryRuntimeConfig } from './SummaryConfigServices';
 
 export class AnalysisRuntime {
     private static instance: AnalysisRuntime;
@@ -40,6 +41,7 @@ export class AnalysisRuntime {
     private summaryStorageService?: SummaryStorageService;
     private summaryCacheService?: SummaryCacheService;
     private summaryQueueService?: SummaryQueueService;
+    private summaryRuntimeConfig: SummaryRuntimeConfig = SummaryConfigService.DEFAULTS;
     private llmModelService?: LLMModelService;
     private llmInitialization?: Promise<void>;
 
@@ -117,8 +119,7 @@ export class AnalysisRuntime {
                     logger.info(`[AnalysisRuntime] 重新扫描失败: ${err}`);
                 });
             }
-            if (e.affectsConfiguration('forwarder.llm.defaultModelName') ||
-                e.affectsConfiguration('forwarder.llm.summaryConcurrency')) {
+            if (e.affectsConfiguration('forwarder.llm')) {
                 this.initializeLLMSupport(storageDir, llmModelStorageDir);
             }
         });
@@ -517,7 +518,8 @@ export class AnalysisRuntime {
             modelService: this.llmModelService,
             forceRefresh,
             allowGenerate,
-            summaryLanguage: this.getCurrentSummaryLanguage()
+            summaryLanguage: this.getCurrentSummaryLanguage(),
+            summaryConfig: this.summaryRuntimeConfig
         });
         // logger.info(`[SummaryBackend] backend-cache-hit completed nodeId=${nodeId}, status=${result.cacheStatus}, stale=${result.stale === true}, model=${result.modelName || result.modelId || '<unknown>'}, reason=${reason}, summaryType=${typeof result.summary}, summaryLength=${String(result.summary || '').length}`);
         return result;
@@ -533,7 +535,8 @@ export class AnalysisRuntime {
             modelService: this.llmModelService,
             forceRefresh,
             allowGenerate,
-            summaryLanguage: this.getCurrentSummaryLanguage()
+            summaryLanguage: this.getCurrentSummaryLanguage(),
+            summaryConfig: this.summaryRuntimeConfig
         });
         logger.info(`[SummaryBackend] class-summary-query completed nodeId=${nodeId}, status=${result.cacheStatus}, ownStale=${result.ownStale === true}, relationStale=${result.relationContextStale === true}, reason=${reason}`);
         return result;
@@ -564,7 +567,8 @@ export class AnalysisRuntime {
             queueService: this.summaryQueueService,
             modelService: this.llmModelService,
             allowGenerate,
-            summaryLanguage: this.getCurrentSummaryLanguage()
+            summaryLanguage: this.getCurrentSummaryLanguage(),
+            summaryConfig: this.summaryRuntimeConfig
         });
     }
 
@@ -581,7 +585,8 @@ export class AnalysisRuntime {
             modelService: this.llmModelService,
             requestId,
             waypointIds,
-            summaryLanguage: this.getCurrentSummaryLanguage()
+            summaryLanguage: this.getCurrentSummaryLanguage(),
+            summaryConfig: this.summaryRuntimeConfig
         });
     }
 
@@ -665,12 +670,15 @@ export class AnalysisRuntime {
 
     private initializeLLMSupport(summaryStorageDir: string, llmModelStorageDir: string): void {
         const configuration = vscode.workspace.getConfiguration('forwarder.llm');
+        const summaryConfig = SummaryConfigService.read(configuration);
+        this.summaryRuntimeConfig = summaryConfig;
         const defaultModelName = String(configuration.get('defaultModelName', '') || '');
-        const concurrency = Number(configuration.get('summaryConcurrency', 2) || 2);
 
         this.summaryStorageService = new SummaryStorageService(summaryStorageDir);
-        this.summaryCacheService = new SummaryCacheService(this.summaryStorageService);
-        this.summaryQueueService = new SummaryQueueService(concurrency);
+        this.summaryCacheService = new SummaryCacheService(this.summaryStorageService, {
+            historyLimit: summaryConfig.history.limit
+        });
+        this.summaryQueueService = new SummaryQueueService(summaryConfig.queue.concurrency);
         this.llmModelService = new LLMModelService({
             storageDir: llmModelStorageDir,
             configuredDefaultModelName: defaultModelName
@@ -679,7 +687,7 @@ export class AnalysisRuntime {
         this.llmInitialization = (async () => {
             await this.summaryStorageService!.initialize();
             await this.llmModelService!.initialize();
-            logger.info(`[AnalysisRuntime] LLM support ready: summaryStorageDir=${summaryStorageDir}, llmModelStorageDir=${llmModelStorageDir}, summaryIndex=${this.summaryStorageService!.getIndexPath()}, concurrency=${concurrency}`);
+            logger.info(`[AnalysisRuntime] LLM support ready: summaryStorageDir=${summaryStorageDir}, llmModelStorageDir=${llmModelStorageDir}, summaryIndex=${this.summaryStorageService!.getIndexPath()}, concurrency=${summaryConfig.queue.concurrency}`);
         })().catch(error => {
             logger.warn(`[AnalysisRuntime] LLM support initialization failed: ${error?.message || error}`);
             throw error;

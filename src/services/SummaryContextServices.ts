@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import { CallPathSummaryContext, EdgeData, EdgeRelation, FunctionSummaryData, GraphViewData, IRNode, SummaryContextCoverage } from '../models/GraphDefinition';
 import { ProjectGraph } from '../models/GraphManager';
 import { SourceLocationService } from './SourceLocationServices';
+import { SummaryConfigService, SummaryFunctionBatchLimits } from './SummaryConfigServices';
 
 export interface FunctionSummaryContext {
     nodeId: string;
@@ -94,7 +95,11 @@ export class SummaryContextService {
         };
     }
 
-    public static async buildFunctionBatchContext(graph: ProjectGraph, nodeIds: string[]): Promise<FunctionBatchSummaryContext> {
+    public static async buildFunctionBatchContext(
+        graph: ProjectGraph,
+        nodeIds: string[],
+        limits: SummaryFunctionBatchLimits = SummaryConfigService.DEFAULTS.batch
+    ): Promise<FunctionBatchSummaryContext> {
         const functions: FunctionSummaryContext[] = [];
         let fileUri = '';
         let languageId = '';
@@ -108,7 +113,7 @@ export class SummaryContextService {
             if (fileUri && node.location.uri !== fileUri) {
                 continue;
             }
-            if (functions.length >= this.BATCH_MAX_FUNCTIONS) {
+            if (functions.length >= limits.maxFunctions) {
                 continue;
             }
 
@@ -117,10 +122,10 @@ export class SummaryContextService {
                 continue;
             }
             const lineCount = context.sourceCode.split(/\r?\n/).length;
-            if (lineCount > this.BATCH_MAX_FUNCTION_LINES || context.sourceCode.length > this.BATCH_MAX_FUNCTION_CHARS) {
+            if (lineCount > limits.maxFunctionLines || context.sourceCode.length > limits.maxFunctionChars) {
                 continue;
             }
-            if (totalChars + context.sourceCode.length > this.BATCH_MAX_TOTAL_CHARS) {
+            if (totalChars + context.sourceCode.length > limits.maxTotalChars) {
                 continue;
             }
 

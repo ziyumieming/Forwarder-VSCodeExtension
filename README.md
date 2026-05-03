@@ -27,6 +27,21 @@ This extension contributes the following settings:
 * `myExtension.enable`: Enable/disable this extension.
 * `myExtension.thing`: Set to `blah` to do something.
 
+### LLM Summary Tuning
+
+Forwarder exposes summary-related parameters under `forwarder.llm.*` so users can tune request volume, context size, and cache retention without changing code:
+
+* `forwarder.llm.summaryConcurrency`: maximum concurrent summary requests.
+* `forwarder.llm.classRelationBriefTopK`: maximum related classes used to complete relation briefs for class summaries; `0` disables this completion.
+* `forwarder.llm.functionBatchMaxFunctions`: maximum functions included in a batch summary request.
+* `forwarder.llm.functionBatchMaxFunctionLines`: maximum source lines included per function in batch summaries.
+* `forwarder.llm.functionBatchMaxFunctionChars`: maximum source characters included per function in batch summaries.
+* `forwarder.llm.functionBatchMaxTotalChars`: maximum total source characters included in one batch summary request.
+* `forwarder.llm.summaryHistoryLimit`: successful summaries retained for the same target, model, prompt version, and language.
+* `forwarder.llm.longPressMs` and `forwarder.llm.summaryHoverDelayMs`: user interaction timing for summary triggering and display.
+
+These settings affect later summary generation and cache writes. Existing summary cache files are not migrated or proactively trimmed.
+
 ## Known Issues
 
 Calling out known issues can help limit users opening duplicate issues against your extension.

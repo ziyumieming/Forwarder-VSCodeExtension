@@ -3,6 +3,7 @@ import { AnalysisViewProvider } from '../providers/AnalysisView';
 import { AnalysisRuntime } from '../services/AnalysisRuntime';
 import { SummaryCacheMissError } from '../services/SummaryArrangeServices';
 import { UiLanguageService } from '../services/UiLanguageServices';
+import { SummaryConfigService } from '../services/SummaryConfigServices';
 import { logger } from '../utils/logger';
 
 export class AnalysisController {
@@ -274,10 +275,11 @@ export class AnalysisController {
 
     private postSummaryUiConfig(): void {
         const configuration = vscode.workspace.getConfiguration('forwarder.llm');
+        const summaryConfig = SummaryConfigService.read(configuration);
         this.provider.postMessage({
             command: 'summaryUiConfigChanged',
-            hoverDelayMs: this.normalizeMs(configuration.get('summaryHoverDelayMs', 1000), 1000, 0, 5000),
-            longPressMs: this.normalizeMs(configuration.get('longPressMs', 650), 650, 250, 2000)
+            hoverDelayMs: summaryConfig.ui.hoverDelayMs,
+            longPressMs: summaryConfig.ui.longPressMs
         });
     }
 
@@ -288,14 +290,6 @@ export class AnalysisController {
             command: 'uiLanguageChanged',
             ...resolution
         });
-    }
-
-    private normalizeMs(value: unknown, fallback: number, min: number, max: number): number {
-        const numeric = Number(value);
-        if (!Number.isFinite(numeric)) {
-            return fallback;
-        }
-        return Math.min(max, Math.max(min, Math.round(numeric)));
     }
 
     public async handleAnalyzeActiveFileCommand(): Promise<void> {

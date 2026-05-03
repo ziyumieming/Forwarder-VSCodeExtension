@@ -51,10 +51,10 @@ export class PromptLanguageService {
     }
 
     public static normalize(language: unknown): SummaryLanguage {
-        return language === 'en' ? 'en' : 'zh-CN';
+        return language === 'zh-CN' ? 'zh-CN' : 'en';
     }
 
-    public static buildFunctionSummaryPrompt(context: FunctionSummaryContext, language: SummaryLanguage = 'zh-CN'): string {
+    public static buildFunctionSummaryPrompt(context: FunctionSummaryContext, language: SummaryLanguage = 'en'): string {
         const fenceLanguage = this.markdownFenceLanguage(context.languageId);
         if (language === 'en') {
             return this.joinLines([
@@ -107,7 +107,7 @@ export class PromptLanguageService {
 
     public static buildFunctionBatchSummaryPrompt(
         context: FunctionBatchSummaryContext,
-        language: SummaryLanguage = 'zh-CN',
+        language: SummaryLanguage = 'en',
         schemaPrompt: string
     ): string {
         const sections = context.functions.flatMap(fn => [
@@ -158,7 +158,7 @@ export class PromptLanguageService {
         ].join('\n');
     }
 
-    public static buildClassRelationBriefPrompt(context: ClassSummaryContext, language: SummaryLanguage = 'zh-CN'): string {
+    public static buildClassRelationBriefPrompt(context: ClassSummaryContext, language: SummaryLanguage = 'en'): string {
         if (language === 'en') {
             return this.joinLines([
                 'Summarize this class briefly so another class summary can understand its likely collaboration role.',
@@ -212,7 +212,7 @@ export class PromptLanguageService {
         ]);
     }
 
-    public static buildClassSummaryPrompt(context: ClassSummaryContext, language: SummaryLanguage = 'zh-CN'): string {
+    public static buildClassSummaryPrompt(context: ClassSummaryContext, language: SummaryLanguage = 'en'): string {
         if (language === 'en') {
             return this.joinLines([
                 'You are a senior code reading assistant. Generate a class summary that explains the role of this class in the project.',
@@ -286,7 +286,7 @@ export class PromptLanguageService {
         ]);
     }
 
-    public static buildCallPathSummaryPrompt(context: CallPathSummaryContext, language: SummaryLanguage = 'zh-CN'): string {
+    public static buildCallPathSummaryPrompt(context: CallPathSummaryContext, language: SummaryLanguage = 'en'): string {
         const stepBlocks = this.formatCallPathSteps(context, language);
         if (language === 'en') {
             return this.joinLines([
