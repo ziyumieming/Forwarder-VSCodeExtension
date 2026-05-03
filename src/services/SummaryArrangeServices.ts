@@ -1,4 +1,4 @@
-import { ClassSummaryData, FunctionSummaryData } from '../models/GraphDefinition';
+import { CallPathSummaryContext, CallPathSummaryResult, ClassSummaryData, FunctionSummaryData, GraphViewData } from '../models/GraphDefinition';
 import { ProjectGraph } from '../models/GraphManager';
 import { LLMPromptResult, LLMService } from './LLMServices';
 import { LLMModelService } from './LLMModelServices';
@@ -35,6 +35,11 @@ export interface FunctionSummaryDependencyResult {
     staleNodeIds: string[];
 }
 
+export interface CallPathSummaryOptions extends SummaryServiceOptions {
+    requestId?: string;
+    waypointIds?: string[];
+}
+
 export class SummaryCacheMissError extends Error {
     constructor(
         public readonly nodeId: string,
@@ -62,6 +67,7 @@ export class SummaryArrangeService {
     public static readonly FUNCTION_BATCH_PROMPT_VERSION = 'function-summary-batch:v1';
     public static readonly CLASS_PROMPT_VERSION = 'class-summary:v1';
     public static readonly CLASS_RELATION_BRIEF_PROMPT_VERSION = 'class-relation-brief:v1';
+    public static readonly CALL_PATH_PROMPT_VERSION = 'call-path-summary:v1';
     private static readonly MAX_RELATION_BRIEFS = 3;
 
     public static async summarizeFunction(
@@ -489,6 +495,70 @@ export class SummaryArrangeService {
         return options.queueService ? options.queueService.enqueue(queueKey, generate) : generate();
     }
 
+    public static async summarizeCallPath(
+        graph: ProjectGraph,
+        graphData: GraphViewData,
+        llmClient: SummaryLLMClient = LLMService,
+        options: CallPathSummaryOptions = {}
+    ): Promise<CallPathSummaryResult> {
+        const requestId = String(options.requestId || '');
+        const selectedModel = options.modelService?.getSelectedModel();
+        const modelName = options.modelService?.getSelectedModelName() || selectedModel?.id || 'default';
+        const modelId = selectedModel?.id;
+        const failure = this.buildDeterministicCallPathFailure(graph, graphData, requestId);
+        if (failure) {
+            return failure;
+        }
+
+        const pathNodeIds = await this.collectCallPathFunctionNodeIds(graph, graphData, options.waypointIds || graphData.meta?.waypointIds || []);
+        const dependencyResult = await this.ensureFunctionSummariesForDependencies(graph, pathNodeIds, llmClient, options);
+        const refreshedStale = options.allowGenerate !== false && dependencyResult.staleNodeIds.length > 0
+            ? await this.refreshStaleCallPathSummaries(graph, dependencyResult.staleNodeIds, llmClient, options)
+            : [];
+        const summaries = new Map<string, FunctionSummaryData>();
+        for (const summary of dependencyResult.summaries) {
+            summaries.set(summary.nodeId, summary);
+        }
+        for (const summary of refreshedStale) {
+            summaries.set(summary.nodeId, summary);
+        }
+        const context = await SummaryContextService.buildCallPathSummaryContext(graph, graphData, options.waypointIds, {
+            functionSummaries: summaries,
+            missingSummaryNodeIds: dependencyResult.missingNodeIds,
+            staleSummaryNodeIds: dependencyResult.staleNodeIds.filter(nodeId => !summaries.has(nodeId) || summaries.get(nodeId)?.stale)
+        });
+        const prompt = this.buildCallPathSummaryPrompt(context);
+        const queueKey = [
+            'call-path-summary',
+            pathNodeIds.join(','),
+            modelName,
+            context.steps.map(step => summaries.get(step.nodeId)?.bodyHash || 'missing').join(','),
+            graphData.meta?.direction || 'outgoing',
+            graphData.meta?.depth ?? graphData.edges.length
+        ].join('|');
+
+        const generate = async (): Promise<CallPathSummaryResult> => {
+            const response = selectedModel?.model
+                ? await LLMService.sendPromptWithModel(selectedModel.model, prompt)
+                : await llmClient.sendPrompt(prompt);
+            const summaryText = String(response.text || '').trim();
+            if (!summaryText) {
+                throw new EmptySummaryError('call-path', modelName, 0);
+            }
+            return {
+                requestId,
+                summary: summaryText,
+                generatedAt: new Date().toISOString(),
+                modelName,
+                modelId: response.modelId || modelId,
+                missingSummaryNodeIds: context.missingSummaryNodeIds,
+                staleSummaryNodeIds: context.staleSummaryNodeIds
+            };
+        };
+
+        return options.queueService ? options.queueService.enqueue(queueKey, generate) : generate();
+    }
+
     public static buildFunctionSummaryPrompt(context: FunctionSummaryContext): string {
         return [
             '你是一个资深代码阅读助手。请根据给定函数/方法的签名和源码生成简洁 Markdown 摘要。',
@@ -597,6 +667,103 @@ export class SummaryArrangeService {
             'Unsummarized related classes (low confidence names only):',
             ...context.unsummarizedRelatedClasses.map(related => `- ${related.label} [${related.relationTypes.join(', ')}]`)
         ].filter(line => line !== '').join('\n');
+    }
+
+    public static buildCallPathSummaryPrompt(context: CallPathSummaryContext): string {
+        const segmentLines = context.segments && context.segments.length > 0
+            ? context.segments.map((segment, index) => `- Segment ${index + 1}: ${segment.sourceLabel} -> ${segment.targetLabel}, found=${segment.pathFound}, depth=${segment.depth}${segment.reason ? `, reason=${segment.reason}` : ''}`)
+            : [];
+        return [
+            'You are a senior code reading assistant. Explain the current shortest function call path.',
+            '',
+            'Output exactly these Markdown sections:',
+            '### 调用链概览',
+            '### 路径步骤',
+            '### 关键传递',
+            '',
+            'Rules:',
+            '- Explain only the returned shortest path; do not claim to cover all branches.',
+            '- Do not mention raw node ids or edge objects.',
+            '- If summaries are missing, say the explanation is based on signatures and path structure for those steps.',
+            '- Do not output a separate notes/caveats section.',
+            context.truncated ? '- The returned path is truncated by depth or node limits; mention that in the relevant section.' : '',
+            '',
+            `Waypoints: ${context.waypointLabels.join(' -> ') || 'not specified'}`,
+            `Direction: ${context.direction || 'outgoing'}`,
+            `Depth: ${context.depth ?? context.steps.length - 1}`,
+            '',
+            ...(segmentLines.length > 0 ? ['Segments:', ...segmentLines, ''] : []),
+            'Path steps:',
+            ...context.steps.map(step => [
+                `${step.order}. ${step.label}`,
+                step.signature ? `   Signature: ${step.signature}` : '',
+                step.fileName ? `   File: ${step.fileName}` : '',
+                step.summary ? `   Function summary: ${step.summary}` : '   Function summary: unavailable',
+                step.stale ? '   Summary status: stale' : ''
+            ].filter(Boolean).join('\n')),
+            '',
+            context.missingSummaryNodeIds.length > 0 ? `Missing function summaries: ${context.missingSummaryNodeIds.length}` : '',
+            context.staleSummaryNodeIds.length > 0 ? `Stale function summaries: ${context.staleSummaryNodeIds.length}` : ''
+        ].filter(line => line !== '').join('\n');
+    }
+
+    private static buildDeterministicCallPathFailure(graph: ProjectGraph, graphData: GraphViewData, requestId: string): CallPathSummaryResult | undefined {
+        const failedSegment = graphData.meta?.segments?.find(segment => segment.pathFound === false);
+        if (graphData.meta?.pathFound === true && !failedSegment) {
+            return undefined;
+        }
+        const formatNode = (nodeId: string) => graph.getNode(nodeId)?.name || nodeId;
+        const reason = failedSegment
+            ? `Segment ${formatNode(failedSegment.sourceId)} -> ${formatNode(failedSegment.targetId)} failed${failedSegment.reason ? `: ${failedSegment.reason}` : '.'}`
+            : graphData.meta?.reason || 'No call path was found for the selected waypoints.';
+        return {
+            requestId,
+            summary: [
+                '### 调用链概览',
+                reason,
+                '',
+                '### 路径步骤',
+                'No complete path is available.',
+                '',
+                '### 关键传递',
+                'No end-to-end transfer can be explained because path calculation did not produce a complete route.'
+            ].join('\n'),
+            generatedAt: new Date().toISOString(),
+            deterministic: true
+        };
+    }
+
+    private static async collectCallPathFunctionNodeIds(graph: ProjectGraph, graphData: GraphViewData, waypointIds: string[]): Promise<string[]> {
+        const context = await SummaryContextService.buildCallPathSummaryContext(graph, graphData, waypointIds);
+        return context.steps.map(step => step.nodeId);
+    }
+
+    private static async refreshStaleCallPathSummaries(
+        graph: ProjectGraph,
+        staleNodeIds: string[],
+        llmClient: SummaryLLMClient,
+        options: SummaryServiceOptions
+    ): Promise<FunctionSummaryData[]> {
+        const refreshed: FunctionSummaryData[] = [];
+        const staleByUri = new Map<string, string[]>();
+        for (const nodeId of staleNodeIds) {
+            const node = graph.getNode(nodeId);
+            if (!node || (node.type !== 'function' && node.type !== 'method')) {
+                continue;
+            }
+            const ids = staleByUri.get(node.location.uri) || [];
+            ids.push(nodeId);
+            staleByUri.set(node.location.uri, ids);
+        }
+        for (const ids of staleByUri.values()) {
+            const batch = await this.summarizeFunctionsBatch(graph, ids, llmClient, {
+                ...options,
+                promptVersion: this.FUNCTION_BATCH_PROMPT_VERSION,
+                forceRefresh: true
+            });
+            refreshed.push(...batch.generated);
+        }
+        return refreshed;
     }
 
     private static async ensureRelationBriefs(

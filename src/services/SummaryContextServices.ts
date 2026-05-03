@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
-import { EdgeRelation, FunctionSummaryData, IRNode, SummaryContextCoverage } from '../models/GraphDefinition';
+import { CallPathSummaryContext, EdgeData, EdgeRelation, FunctionSummaryData, GraphViewData, IRNode, SummaryContextCoverage } from '../models/GraphDefinition';
 import { ProjectGraph } from '../models/GraphManager';
 import { SourceLocationService } from './SourceLocationServices';
 
@@ -235,6 +235,186 @@ export class SummaryContextService {
                 methodSummaryCount: methods.filter(method => !!method.summary).length
             }
         };
+    }
+
+    public static async buildCallPathSummaryContext(
+        graph: ProjectGraph,
+        graphData: GraphViewData,
+        waypointIds: string[] = [],
+        options: {
+            functionSummaries?: Map<string, FunctionSummaryData>;
+            missingSummaryNodeIds?: string[];
+            staleSummaryNodeIds?: string[];
+        } = {}
+    ): Promise<CallPathSummaryContext> {
+        const nodeMap = new Map(graphData.nodes.map(node => [node.id, node]));
+        const normalizedWaypointIds = (waypointIds.length > 0 ? waypointIds : graphData.meta?.waypointIds || [])
+            .map(id => String(id))
+            .filter(id => id.length > 0);
+        const pathNodeIds = this.orderCallPathNodeIds(graphData, normalizedWaypointIds);
+        const steps = [];
+
+        for (let index = 0; index < pathNodeIds.length; index += 1) {
+            const nodeId = pathNodeIds[index];
+            const node = nodeMap.get(nodeId) || graph.getNode(nodeId);
+            if (!node || (node.type !== 'function' && node.type !== 'method')) {
+                continue;
+            }
+            let signature = node.signature;
+            let fileName = SourceLocationService.summarizeUri(node.location.uri);
+            try {
+                const context = await this.buildFunctionContext(graph, nodeId);
+                signature = context.signature;
+                fileName = context.fileName;
+            } catch {
+                // Use graph metadata when the source file is unavailable.
+            }
+            const summary = options.functionSummaries?.get(nodeId);
+            steps.push({
+                order: steps.length + 1,
+                nodeId,
+                label: node.name,
+                signature,
+                fileName,
+                summary: summary?.summary,
+                stale: summary?.stale === true
+            });
+        }
+
+        const waypointLabels = normalizedWaypointIds.map(nodeId => {
+            const node = nodeMap.get(nodeId) || graph.getNode(nodeId);
+            return node?.name || nodeId;
+        });
+
+        return {
+            waypointIds: normalizedWaypointIds,
+            waypointLabels,
+            steps,
+            direction: graphData.meta?.direction,
+            depth: graphData.meta?.depth,
+            truncated: graphData.meta?.truncated === true,
+            segments: graphData.meta?.segments?.map(segment => ({
+                sourceLabel: (nodeMap.get(segment.sourceId) || graph.getNode(segment.sourceId))?.name || segment.sourceId,
+                targetLabel: (nodeMap.get(segment.targetId) || graph.getNode(segment.targetId))?.name || segment.targetId,
+                pathFound: segment.pathFound,
+                depth: segment.depth,
+                reason: segment.reason
+            })),
+            missingSummaryNodeIds: options.missingSummaryNodeIds || [],
+            staleSummaryNodeIds: options.staleSummaryNodeIds || []
+        };
+    }
+
+    private static orderCallPathNodeIds(graphData: GraphViewData, waypointIds: string[]): string[] {
+        const nodes = graphData.nodes.filter(node => node.type === 'function' || node.type === 'method');
+        const nodeIds = new Set(nodes.map(node => node.id));
+        if (nodeIds.size === 0) {
+            return [];
+        }
+
+        const direction = graphData.meta?.direction || 'outgoing';
+        const starts = waypointIds.filter(id => nodeIds.has(id));
+        const segments = graphData.meta?.segments || [];
+        const ordered: string[] = [];
+        const used = new Set<string>();
+
+        const append = (id: string) => {
+            if (nodeIds.has(id) && !used.has(id)) {
+                ordered.push(id);
+                used.add(id);
+            }
+        };
+
+        if (segments.length > 0) {
+            for (const segment of segments) {
+                const segmentIds = this.walkCallPathSegment(graphData.edges, segment.sourceId, segment.targetId, direction, nodeIds);
+                for (const id of segmentIds) {
+                    append(id);
+                }
+            }
+        } else if (starts.length >= 2) {
+            const segmentIds = this.walkCallPathSegment(graphData.edges, starts[0], starts[starts.length - 1], direction, nodeIds);
+            for (const id of segmentIds) {
+                append(id);
+            }
+        } else if (starts.length === 1) {
+            const segmentIds = this.walkCallPathSegment(graphData.edges, starts[0], undefined, direction, nodeIds);
+            for (const id of segmentIds) {
+                append(id);
+            }
+        }
+
+        if (ordered.length === 0 && graphData.edges.length > 0) {
+            const sourceCounts = new Map<string, number>();
+            const targetCounts = new Map<string, number>();
+            for (const edge of graphData.edges) {
+                sourceCounts.set(edge.sourceId, (sourceCounts.get(edge.sourceId) || 0) + 1);
+                targetCounts.set(edge.targetId, (targetCounts.get(edge.targetId) || 0) + 1);
+            }
+            const start = nodes.find(node => !targetCounts.has(node.id))?.id || nodes[0]?.id;
+            if (start) {
+                for (const id of this.walkCallPathSegment(graphData.edges, start, undefined, 'outgoing', nodeIds)) {
+                    append(id);
+                }
+            }
+        }
+
+        for (const node of nodes) {
+            append(node.id);
+        }
+        return ordered;
+    }
+
+    private static walkCallPathSegment(
+        edges: EdgeData[],
+        sourceId: string,
+        targetId: string | undefined,
+        direction: 'incoming' | 'outgoing' | 'both',
+        allowedNodeIds: Set<string>
+    ): string[] {
+        if (!allowedNodeIds.has(sourceId)) {
+            return [];
+        }
+        const result = [sourceId];
+        const visited = new Set<string>([sourceId]);
+        let cursor = sourceId;
+        while (targetId ? cursor !== targetId : true) {
+            const next = this.findNextCallPathNode(edges, cursor, direction, allowedNodeIds, visited);
+            if (!next) {
+                break;
+            }
+            result.push(next);
+            visited.add(next);
+            cursor = next;
+        }
+        return result;
+    }
+
+    private static findNextCallPathNode(
+        edges: EdgeData[],
+        currentId: string,
+        direction: 'incoming' | 'outgoing' | 'both',
+        allowedNodeIds: Set<string>,
+        visited: Set<string>
+    ): string | undefined {
+        const candidates: string[] = [];
+        for (const edge of edges) {
+            if (direction !== 'incoming' && edge.sourceId === currentId && allowedNodeIds.has(edge.targetId)) {
+                candidates.push(edge.targetId);
+            }
+            if (direction !== 'outgoing' && edge.targetId === currentId && allowedNodeIds.has(edge.sourceId)) {
+                candidates.push(edge.sourceId);
+            }
+            if (direction === 'both') {
+                if (edge.sourceId === currentId && allowedNodeIds.has(edge.targetId)) {
+                    candidates.push(edge.targetId);
+                }
+                if (edge.targetId === currentId && allowedNodeIds.has(edge.sourceId)) {
+                    candidates.push(edge.sourceId);
+                }
+            }
+        }
+        return candidates.find(id => !visited.has(id));
     }
 
     private static getContainedMethods(graph: ProjectGraph, nodeId: string): IRNode[] {

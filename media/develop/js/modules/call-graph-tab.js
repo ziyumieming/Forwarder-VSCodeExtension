@@ -100,6 +100,11 @@
         var hasGraphViewState = typeof safeContext.hasGraphViewState === 'function' ? safeContext.hasGraphViewState : function () { return false; };
         var hasPendingGraphRender = typeof safeContext.hasPendingGraphRender === 'function' ? safeContext.hasPendingGraphRender : function () { return false; };
         var showEmptyGraphView = typeof safeContext.showEmptyGraphView === 'function' ? safeContext.showEmptyGraphView : noop;
+        var beginPathSummary = typeof safeContext.beginPathSummary === 'function' ? safeContext.beginPathSummary : function () { return null; };
+        var cancelPathSummary = typeof safeContext.cancelPathSummary === 'function' ? safeContext.cancelPathSummary : noop;
+        var isPathSummaryOpen = typeof safeContext.isPathSummaryOpen === 'function'
+            ? safeContext.isPathSummaryOpen
+            : function () { return false; };
         var getQueryDebounceWindowMs = typeof safeContext.getQueryDebounceWindowMs === 'function'
             ? safeContext.getQueryDebounceWindowMs
             : function () { return 80; };
@@ -246,24 +251,47 @@
                 });
                 return null;
             }
+            if (isPathSummaryOpen()) {
+                log('query', 'info', 'skip call path query while summary panel is open', {
+                    source: source || 'unknown'
+                });
+                return null;
+            }
 
             state.lastQueryKind = 'path';
+            var pathSummaryRequestId = beginPathSummary({
+                waypointIds: pathSlots.map(function (slot) { return slot.id; }),
+                waypointLabels: pathSlots.map(function (slot) { return slot.label || labelFromId(slot.id); }),
+                direction: 'outgoing',
+                depth: 8,
+                includeExternal: !!state.includeExternal
+            });
             if (pathSlots.length === 2) {
-                return sendQuery('queryFunctionCallPath', {
+                var directQueryId = sendQuery('queryFunctionCallPath', {
                     sourceId: pathSlots[0].id,
                     targetId: pathSlots[1].id,
                     direction: 'outgoing',
                     maxDepth: 8,
-                    includeExternal: !!state.includeExternal
+                    includeExternal: !!state.includeExternal,
+                    pathSummaryRequestId: pathSummaryRequestId
                 }, 'call-path');
+                if (!directQueryId) {
+                    cancelPathSummary(pathSummaryRequestId);
+                }
+                return directQueryId;
             }
 
-            return sendQuery('queryFunctionCallWaypointPath', {
+            var waypointQueryId = sendQuery('queryFunctionCallWaypointPath', {
                 nodeIds: pathSlots.map(function (slot) { return slot.id; }),
                 direction: 'outgoing',
                 maxDepthPerSegment: 8,
-                includeExternal: !!state.includeExternal
+                includeExternal: !!state.includeExternal,
+                pathSummaryRequestId: pathSummaryRequestId
             }, 'call-path');
+            if (!waypointQueryId) {
+                cancelPathSummary(pathSummaryRequestId);
+            }
+            return waypointQueryId;
         }
 
         function replayLastQuery(source) {

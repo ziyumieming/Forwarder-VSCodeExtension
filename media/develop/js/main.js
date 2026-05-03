@@ -63,6 +63,9 @@
     let selectedLLMModelName = '';
     let summaryLongPressMs = 650;
     let summaryHoverDelayMs = 1000;
+    let activePathSummaryRequestId = null;
+    let pathSummarySequence = 0;
+    let pendingPathSummaryQuery = null;
     let summaryHoldState = null;
     let summaryHoverState = null;
     const summaryRequestAnchors = new Map();
@@ -411,6 +414,171 @@
 
     function escapeHtmlAttribute(text) {
         return escapeHtml(text).replace(/`/g, '&#96;');
+    }
+
+    function renderPathSummaryMarkdown(markdown) {
+        const lines = String(markdown || '').split(/\r?\n/);
+        const html = [];
+        let paragraph = [];
+        const flushParagraph = () => {
+            if (paragraph.length > 0) {
+                html.push('<p>' + paragraph.map(escapeHtml).join('<br>') + '</p>');
+                paragraph = [];
+            }
+        };
+        for (const line of lines) {
+            const heading = line.match(/^###\s+(.+)$/);
+            if (heading) {
+                flushParagraph();
+                html.push('<h4>' + escapeHtml(heading[1]) + '</h4>');
+                continue;
+            }
+            if (!line.trim()) {
+                flushParagraph();
+                continue;
+            }
+            paragraph.push(line);
+        }
+        flushParagraph();
+        return html.join('');
+    }
+
+    function setPathSummaryContent(kind, content) {
+        const contentEl = document.getElementById('path-summary-content');
+        if (!contentEl) {
+            return;
+        }
+        contentEl.classList.toggle('is-loading', kind === 'loading');
+        contentEl.classList.toggle('is-error', kind === 'error');
+        if (kind === 'loading') {
+            contentEl.innerHTML = '<p>Analyzing call path...</p>';
+            return;
+        }
+        contentEl.innerHTML = renderPathSummaryMarkdown(content || '');
+    }
+
+    function openPathSummaryPanel(meta) {
+        if (activePathSummaryRequestId) {
+            return null;
+        }
+        const requestId = 'path-summary-' + Date.now() + '-' + (++pathSummarySequence);
+        activePathSummaryRequestId = requestId;
+        pendingPathSummaryQuery = {
+            requestId,
+            waypointIds: Array.isArray(meta?.waypointIds) ? meta.waypointIds.slice() : [],
+            waypointLabels: Array.isArray(meta?.waypointLabels) ? meta.waypointLabels.slice() : [],
+            direction: meta?.direction || 'outgoing',
+            depth: meta?.depth || 8,
+            includeExternal: !!meta?.includeExternal
+        };
+        const panel = document.getElementById('path-summary-panel');
+        const tray = document.getElementById('call-path-tray');
+        if (panel) {
+            panel.hidden = false;
+        }
+        if (tray) {
+            tray.hidden = true;
+        }
+        setPathSummaryContent('loading');
+        if (callPathTray && typeof callPathTray.refresh === 'function') {
+            callPathTray.refresh();
+        }
+        return requestId;
+    }
+
+    function closePathSummaryPanel() {
+        activePathSummaryRequestId = null;
+        pendingPathSummaryQuery = null;
+        const panel = document.getElementById('path-summary-panel');
+        const tray = document.getElementById('call-path-tray');
+        if (panel) {
+            panel.hidden = true;
+        }
+        if (tray) {
+            tray.hidden = false;
+        }
+        if (callPathTray && typeof callPathTray.refresh === 'function') {
+            callPathTray.refresh();
+        }
+    }
+
+    function cancelPathSummaryPanel(requestId) {
+        if (!requestId || activePathSummaryRequestId === requestId) {
+            closePathSummaryPanel();
+        }
+    }
+
+    function isPathSummaryPanelOpen() {
+        return !!activePathSummaryRequestId;
+    }
+
+    function isCompleteCallPathGraph(graphData) {
+        if (!graphData || !graphData.meta || graphData.meta.pathFound !== true) {
+            return false;
+        }
+        return !(Array.isArray(graphData.meta.segments)
+            && graphData.meta.segments.some(segment => segment && segment.pathFound === false));
+    }
+
+    function renderDeterministicPathSummaryFailure(graphData) {
+        const reason = graphData?.meta?.reason
+            || (Array.isArray(graphData?.meta?.segments) && graphData.meta.segments.find(segment => segment && segment.pathFound === false)?.reason)
+            || 'No complete call path was found for the selected waypoints.';
+        setPathSummaryContent('error', [
+            '### 调用链概览',
+            reason,
+            '',
+            '### 路径步骤',
+            'No complete path is available.',
+            '',
+            '### 关键传递',
+            'No end-to-end transfer can be explained because path calculation did not produce a complete route.'
+        ].join('\n'));
+    }
+
+    function requestCallPathSummary(graphData) {
+        if (!activePathSummaryRequestId || !pendingPathSummaryQuery) {
+            return;
+        }
+        if (!isCompleteCallPathGraph(graphData)) {
+            renderDeterministicPathSummaryFailure(graphData);
+            return;
+        }
+        vscode.postMessage({
+            command: 'queryFunctionCallPathSummary',
+            pathSummaryRequestId: activePathSummaryRequestId,
+            graphData,
+            waypointIds: pendingPathSummaryQuery.waypointIds,
+            waypointLabels: pendingPathSummaryQuery.waypointLabels,
+            direction: pendingPathSummaryQuery.direction,
+            depth: pendingPathSummaryQuery.depth,
+            includeExternal: pendingPathSummaryQuery.includeExternal
+        });
+    }
+
+    function renderCallPathSummaryData(data) {
+        const requestId = data?.requestId || data?.pathSummaryRequestId;
+        if (!activePathSummaryRequestId || requestId !== activePathSummaryRequestId) {
+            return;
+        }
+        setPathSummaryContent('result', data.summary || '');
+    }
+
+    function renderCallPathSummaryError(data) {
+        const requestId = data?.requestId || data?.pathSummaryRequestId;
+        if (!activePathSummaryRequestId || requestId !== activePathSummaryRequestId) {
+            return;
+        }
+        setPathSummaryContent('error', [
+            '### 调用链概览',
+            data?.message || 'Call path summary failed.',
+            '',
+            '### 路径步骤',
+            'The path graph may still be available, but no explanation was generated.',
+            '',
+            '### 关键传递',
+            'No transfer explanation is available for this request.'
+        ].join('\n'));
     }
 
     function getNodeKind(node) {
@@ -1960,6 +2128,7 @@
             getActiveTabId: () => tabManagerModule && typeof tabManagerModule.getActiveTabId === 'function'
                 ? tabManagerModule.getActiveTabId()
                 : 'relationGraph',
+            isPathSummaryOpen: isPathSummaryPanelOpen,
             onQueryPath: (source) => {
                 if (callGraphTab && typeof callGraphTab.requestPathGraph === 'function') {
                     callGraphTab.requestPathGraph(source || 'path-tray');
@@ -2056,6 +2225,9 @@
             hasGraphViewState: hasGraphViewState,
             hasPendingGraphRender: hasPendingGraphRender,
             showEmptyGraphView: showEmptyGraphView,
+            beginPathSummary: openPathSummaryPanel,
+            cancelPathSummary: cancelPathSummaryPanel,
+            isPathSummaryOpen: isPathSummaryPanelOpen,
             isActiveTab: () => tabManagerModule
                 && typeof tabManagerModule.getActiveTabId === 'function'
                 && tabManagerModule.getActiveTabId() === 'callGraph',
@@ -2193,14 +2365,7 @@
     });
 
     document.getElementById('btn-path-summary-close')?.addEventListener('click', function () {
-        const panel = document.getElementById('path-summary-panel');
-        const tray = document.getElementById('call-path-tray');
-        if (panel) {
-            panel.hidden = true;
-        }
-        if (tray) {
-            tray.hidden = false;
-        }
+        closePathSummaryPanel();
     });
 
     // 监听来自后端的消息
@@ -2413,7 +2578,18 @@
             return;
         }
 
+        if (data.command === 'callPathSummaryData') {
+            renderCallPathSummaryData(data);
+            return;
+        }
+
+        if (data.command === 'callPathSummaryError') {
+            renderCallPathSummaryError(data);
+            return;
+        }
+
         if (data.command === 'renderGraphData') {
+            const pathSummaryRequestId = data.pathSummaryRequestId || responseMeta?.payload?.pathSummaryRequestId || null;
             if (droppedByLatestWin) {
                 log('query', 'info', 'drop stale response by latest-win', {
                     responseQueryId,
@@ -2445,6 +2621,11 @@
                         presentationMode: targetTabId === 'callGraph' ? 'simple-node' : 'class-card'
                     }
                 });
+                if ((responseRequestMode || responseMeta?.meta?.requestMode) === 'call-path'
+                    && activePathSummaryRequestId
+                    && pathSummaryRequestId === activePathSummaryRequestId) {
+                    requestCallPathSummary(data.data);
+                }
                 log('query', 'info', 'defer inactive tab render response', {
                     targetTabId,
                     activeTabId,
@@ -2459,6 +2640,11 @@
                 callGraphTab.renderGraphData(data.data, {
                     requestMode: responseRequestMode
                 });
+                if (responseRequestMode === 'call-path'
+                    && activePathSummaryRequestId
+                    && pathSummaryRequestId === activePathSummaryRequestId) {
+                    requestCallPathSummary(data.data);
+                }
                 return;
             }
 

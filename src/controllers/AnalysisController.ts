@@ -197,6 +197,29 @@ export class AnalysisController {
                 break;
             }
 
+            case 'queryFunctionCallPathSummary': {
+                const requestId = String(data.pathSummaryRequestId || data.requestId || '');
+                logger.info(`[AnalysisController] queryFunctionCallPathSummary requestId=${requestId}`);
+                try {
+                    const summary = await this.runtime.queryFunctionCallPathSummary(
+                        data.graphData,
+                        Array.isArray(data.waypointIds) ? data.waypointIds.map(String) : [],
+                        requestId
+                    );
+                    this.provider.postMessage({
+                        command: 'callPathSummaryData',
+                        ...summary
+                    });
+                } catch (error: any) {
+                    this.provider.postMessage({
+                        command: 'callPathSummaryError',
+                        requestId,
+                        message: error?.message || String(error)
+                    });
+                }
+                break;
+            }
+
             case 'getFunctionSummaryHistory': {
                 try {
                     logger.info(`[AnalysisController] getFunctionSummaryHistory nodeId=${data.nodeId}, modelName=${data.modelName || '*'}`);
@@ -235,7 +258,8 @@ export class AnalysisController {
             data: result,
             __queryId: request.__queryId,
             __queryMode: request.__queryMode,
-            __querySignature: request.__querySignature
+            __querySignature: request.__querySignature,
+            pathSummaryRequestId: request.pathSummaryRequestId
         });
     }
 

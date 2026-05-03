@@ -4,7 +4,7 @@ import { AdapterService } from './AdapterServices';
 import { CallGraphDirection, ViewQueryService } from './ViewServices';
 import { SynchronizationService } from './SynchronizationServices';
 import { GatingService } from './GatingServices';
-import { AnalysisIndexStatus, ClassSummaryData, EdgeRelation, FunctionRef, FunctionSummaryData, GraphNodeRef, GraphViewData, NodeType, SourceLocationTarget } from '../models/GraphDefinition';
+import { AnalysisIndexStatus, CallPathSummaryResult, ClassSummaryData, EdgeRelation, FunctionRef, FunctionSummaryData, GraphNodeRef, GraphViewData, NodeType, SourceLocationTarget } from '../models/GraphDefinition';
 import { SourceLocationService } from './SourceLocationServices';
 import { AnalysisIndexStatusService } from './StatusServices';
 import { logger } from '../utils/logger';
@@ -560,6 +560,22 @@ export class AnalysisRuntime {
             queueService: this.summaryQueueService,
             modelService: this.llmModelService,
             allowGenerate
+        });
+    }
+
+    public async queryFunctionCallPathSummary(
+        graphData: GraphViewData,
+        waypointIds: string[] = [],
+        requestId: string = ''
+    ): Promise<CallPathSummaryResult> {
+        await this.indexStatusService.waitForSnapshotReady();
+        await this.ensureLLMSupportReady();
+        return SummaryArrangeService.summarizeCallPath(this.projectGraph, graphData, undefined, {
+            cacheService: this.summaryCacheService,
+            queueService: this.summaryQueueService,
+            modelService: this.llmModelService,
+            requestId,
+            waypointIds
         });
     }
 

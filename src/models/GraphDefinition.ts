@@ -79,6 +79,45 @@ export interface ClassSummaryData extends FunctionSummaryData {
     missingContextNodeIds?: string[];
 }
 
+export interface CallPathStepContext {
+    order: number;
+    nodeId: string;
+    label: string;
+    signature?: string;
+    fileName?: string;
+    summary?: string;
+    stale?: boolean;
+}
+
+export interface CallPathSummaryContext {
+    waypointIds: string[];
+    waypointLabels: string[];
+    steps: CallPathStepContext[];
+    direction?: 'incoming' | 'outgoing' | 'both';
+    depth?: number;
+    truncated?: boolean;
+    segments?: {
+        sourceLabel: string;
+        targetLabel: string;
+        pathFound: boolean;
+        depth: number;
+        reason?: string;
+    }[];
+    missingSummaryNodeIds: string[];
+    staleSummaryNodeIds: string[];
+}
+
+export interface CallPathSummaryResult {
+    requestId: string;
+    summary: string;
+    generatedAt: string;
+    modelName?: string;
+    modelId?: string;
+    missingSummaryNodeIds?: string[];
+    staleSummaryNodeIds?: string[];
+    deterministic?: boolean;
+}
+
 export interface GraphNodeRef {
     id: string;
     label: string;

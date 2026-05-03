@@ -28,6 +28,9 @@
             : function () { return null; };
         var onQueryPath = typeof safeContext.onQueryPath === 'function' ? safeContext.onQueryPath : noop;
         var onSetCenter = typeof safeContext.onSetCenter === 'function' ? safeContext.onSetCenter : noop;
+        var isPathSummaryOpen = typeof safeContext.isPathSummaryOpen === 'function'
+            ? safeContext.isPathSummaryOpen
+            : function () { return false; };
         var log = typeof safeContext.log === 'function' ? safeContext.log : noop;
 
         var refs = {};
@@ -209,8 +212,11 @@
                     : 'Add functions to define waypoint order.';
             }
             if (refs.pathQuery) {
-                refs.pathQuery.disabled = functions.length < 2;
-                refs.pathQuery.title = functions.length < 2
+                var summaryOpen = isPathSummaryOpen();
+                refs.pathQuery.disabled = functions.length < 2 || summaryOpen;
+                refs.pathQuery.title = summaryOpen
+                    ? 'Close the current path summary before starting another query'
+                    : functions.length < 2
                     ? 'Add at least two functions to query a call path'
                     : 'Query call path for ordered waypoints';
             }
