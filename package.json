@@ -3,7 +3,7 @@
   "displayName": "CodeGraph Navigator",
   "icon": "media/images/forwarder.ico",
   "description": "Visualize code structure, call paths, and AI summaries inside VS Code.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "ziyumieming",
   "keywords": [
     "code visualization",
