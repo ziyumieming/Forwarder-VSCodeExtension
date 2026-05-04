@@ -1,8 +1,12 @@
 import * as vscode from 'vscode';
-import { EdgeData, IRNode } from '../models/GraphDefinition';
-import { PythonInheritanceExtractor } from './inheriance/PythonInheritanceExtractor';
+import { PythonInheritanceExtractor } from './inheritance/PythonInheritanceExtractor';
+import { GoInheritanceExtractor } from './inheritance/GoInheritanceExtractor';
 
 import { DocumentSymbolIndex } from '../services/AdapterServices';
+import { ExtractionResult } from './ExtractorUtils';
+
+
+
 
 export class InheritanceExtractor {
     public static async extractEdges(
@@ -10,9 +14,10 @@ export class InheritanceExtractor {
         index: DocumentSymbolIndex,
         uriString: string,
         languageId: string  // 从 document.languageId 传进来
-    ): Promise<{ edges: EdgeData[], placeholderNodes: IRNode[] }> {
+    ): Promise<ExtractionResult> {
         switch (languageId) {
-            // case 'go':
+            case 'go':
+                return await GoInheritanceExtractor.analyze(document, index, uriString);
             case 'python':
                 return await PythonInheritanceExtractor.analyze(document, index, uriString);
             // case 'typescript':

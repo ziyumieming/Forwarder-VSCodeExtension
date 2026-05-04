@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { AnalysisViewProvider } from './providers/AnalysisView';
 import { AnalysisController } from './controllers/AnalysisController';
+import { DebugController } from './controllers/DebugController';
 import { AnalysisRuntime } from './services/AnalysisRuntime';
 import { logger } from './utils/logger';
 
@@ -31,7 +32,7 @@ export function activate(context: vscode.ExtensionContext) {
 		singleFileUriStr = vscode.window.activeTextEditor?.document.uri.toString();
 	}
 
-	runtime.initialize(storageDir, isSingleFileMode, singleFileUriStr);
+	runtime.initialize(storageDir, isSingleFileMode, singleFileUriStr, context.globalStorageUri.fsPath);
 	runtime.runIncrementalSync().catch(err => {
 		logger.info(`后台增量同步启动失败：${err}`);
 	});
@@ -45,8 +46,25 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	}));
 	context.subscriptions.push(vscode.commands.registerCommand('forwarder.analyze', () => analysisController.handleAnalyzeActiveFileCommand()));
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.addFunctionToCallPath', () => analysisController.handleAddActiveFunctionToCallPathCommand()));
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.setFunctionAsCallCenter', () => analysisController.handleSetActiveFunctionAsCallCenterCommand()));
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.summarizeActiveFunction', () => analysisController.handleSummarizeActiveFunctionCommand()));
+	context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(event => {
+		analysisController.handleEditorSelectionChanged(event.textEditor);
+	}));
+	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => {
+		analysisController.handleEditorSelectionChanged(editor);
+	}));
+	analysisController.handleEditorSelectionChanged(vscode.window.activeTextEditor);
+	// Debug commands
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.analyze', () => DebugController.debugAnalyzeCurrentFile()));
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.lspTypeHierarchy', () => DebugController.debugLSPTypeHierarchy()));
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.lspCallHierarchy', () => DebugController.debugLSPCallHierarchy()));
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.queryRelations', () => DebugController.debugQueryRelations()));
+	context.subscriptions.push(vscode.commands.registerCommand('forwarder.debug.clearAndRebuild', () => DebugController.debugClearAndRebuildGraph()));
 
 	// 将 runtime 也加入销毁队列，保证退出时解除设置监听
+	context.subscriptions.push({ dispose: () => analysisController.dispose() });
 	context.subscriptions.push({ dispose: () => runtime.dispose() });
 }
 

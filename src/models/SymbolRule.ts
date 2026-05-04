@@ -8,6 +8,7 @@ export class SymbolRule {
     public static mapSymbolKindToNodeType(kind: vscode.SymbolKind): NodeType | undefined {
         switch (kind) {
             case vscode.SymbolKind.Class:
+            case vscode.SymbolKind.Struct:
                 return 'class';
             case vscode.SymbolKind.Interface:
                 return 'interface';

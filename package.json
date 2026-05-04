@@ -1,41 +1,77 @@
 {
   "name": "forwarder",
   "displayName": "Forwarder",
-  "description": "Design of VSCode Intelligent Visual Analysis Plugin for Code Understanding",
+  "description": "Visualize code structure, call paths, and AI summaries inside VS Code.",
   "version": "0.0.1",
   "publisher": "ziyumieming",
+  "keywords": [
+    "code visualization",
+    "code graph",
+    "call graph",
+    "class diagram",
+    "code understanding",
+    "AI summary"
+  ],
   "engines": {
     "vscode": "^1.107.1"
   },
   "categories": [
     "Other"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ziyumieming/Forwarder-VSCodeExtension.git"
+  },
   "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "forwarder.analyze0",
-        "title": "Go Forwarder"
+        "title": "%forwarder.commands.analyze0%"
       },
       {
         "command": "forwarder.analyze",
-        "title": "Analyze: 分析当前文件代码结构"
+        "title": "%forwarder.commands.analyze%"
+      },
+      {
+        "command": "forwarder.addFunctionToCallPath",
+        "title": "%forwarder.commands.addFunctionToCallPath%"
+      },
+      {
+        "command": "forwarder.setFunctionAsCallCenter",
+        "title": "%forwarder.commands.setFunctionAsCallCenter%"
       },
       {
         "command": "forwarder.debug.analyze",
-        "title": "Debug: 检验流程通行性"
+        "title": "%forwarder.commands.debug.analyze%"
       },
       {
         "command": "forwarder.debug.lspTypeHierarchy",
-        "title": "Debug: 诊断LSP类型层次查询 - 检查extends/implements"
+        "title": "%forwarder.commands.debug.lspTypeHierarchy%"
+      },
+      {
+        "command": "forwarder.debug.lspCallHierarchy",
+        "title": "%forwarder.commands.debug.lspCallHierarchy%"
+      },
+      {
+        "command": "forwarder.debug.queryRelations",
+        "title": "%forwarder.commands.debug.queryRelations%"
+      },
+      {
+        "command": "forwarder.debug.clearAndRebuild",
+        "title": "%forwarder.commands.debug.clearAndRebuild%"
+      },
+      {
+        "command": "forwarder.debug.summarizeActiveFunction",
+        "title": "%forwarder.commands.debug.summarizeActiveFunction%"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "forwarder-sidebar",
-          "title": "Forwarder代码总结",
+          "title": "%forwarder.views.container.title%",
           "icon": "$(pulse)"
         }
       ]
@@ -45,7 +81,7 @@
         {
           "type": "webview",
           "id": "forwarder-view",
-          "name": "土豆爆炸",
+          "name": "%forwarder.views.analysis.name%",
           "icon": "media/Rust.ico"
         }
       ]
@@ -61,12 +97,22 @@
           "when": "editorTextFocus",
           "command": "forwarder.analyze",
           "group": "navigation"
+        },
+        {
+          "when": "editorTextFocus",
+          "command": "forwarder.addFunctionToCallPath",
+          "group": "navigation"
+        },
+        {
+          "when": "editorTextFocus",
+          "command": "forwarder.setFunctionAsCallCenter",
+          "group": "navigation"
         }
       ]
     },
     "keybindings": [
       {
-        "command": "forwarder.getFunction",
+        "command": "forwarder.addFunctionToCallPath",
         "key": "ctrl+alt+f",
         "when": "editorTextFocus"
       },
@@ -83,17 +129,95 @@
       }
     ],
     "configuration": {
-      "title": "Forwarder",
+      "title": "%forwarder.configuration.title%",
       "properties": {
+        "forwarder.ui.language": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "en",
+            "zh-CN"
+          ],
+          "description": "%forwarder.configuration.ui.language.description%"
+        },
         "forwarder.analysis.includePattern": {
           "type": "string",
           "default": "**/*.{ts,js,py,java,cpp,c,cs,go,rs,rb,php}",
-          "description": "需要进行结构扫描和图构建的文件类型模式 (Glob syntax)。"
+          "description": "%forwarder.configuration.analysis.includePattern.description%"
         },
         "forwarder.analysis.excludePattern": {
           "type": "string",
           "default": "**/{node_modules,.git,.svn,out,dist,build,bin,obj,vendor,target,.vscode,.idea}/**",
-          "description": "进行结构扫描时需要排斥的文件夹和文件模式 (Glob syntax)。"
+          "description": "%forwarder.configuration.analysis.excludePattern.description%"
+        },
+        "forwarder.llm.defaultModelName": {
+          "type": "string",
+          "default": "",
+          "description": "%forwarder.configuration.llm.defaultModelName.description%"
+        },
+        "forwarder.llm.summaryConcurrency": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 4,
+          "description": "%forwarder.configuration.llm.summaryConcurrency.description%"
+        },
+        "forwarder.llm.classRelationBriefTopK": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "%forwarder.configuration.llm.classRelationBriefTopK.description%"
+        },
+        "forwarder.llm.functionBatchMaxFunctions": {
+          "type": "number",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "%forwarder.configuration.llm.functionBatchMaxFunctions.description%"
+        },
+        "forwarder.llm.functionBatchMaxFunctionLines": {
+          "type": "number",
+          "default": 120,
+          "minimum": 10,
+          "maximum": 500,
+          "description": "%forwarder.configuration.llm.functionBatchMaxFunctionLines.description%"
+        },
+        "forwarder.llm.functionBatchMaxFunctionChars": {
+          "type": "number",
+          "default": 6000,
+          "minimum": 500,
+          "maximum": 30000,
+          "description": "%forwarder.configuration.llm.functionBatchMaxFunctionChars.description%"
+        },
+        "forwarder.llm.functionBatchMaxTotalChars": {
+          "type": "number",
+          "default": 24000,
+          "minimum": 1000,
+          "maximum": 100000,
+          "description": "%forwarder.configuration.llm.functionBatchMaxTotalChars.description%"
+        },
+        "forwarder.llm.summaryHistoryLimit": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "%forwarder.configuration.llm.summaryHistoryLimit.description%"
+        },
+        "forwarder.llm.longPressMs": {
+          "type": "number",
+          "default": 650,
+          "minimum": 250,
+          "maximum": 2000,
+          "description": "%forwarder.configuration.llm.longPressMs.description%"
+        },
+        "forwarder.llm.summaryHoverDelayMs": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 0,
+          "maximum": 5000,
+          "description": "%forwarder.configuration.llm.summaryHoverDelayMs.description%"
         }
       }
     }

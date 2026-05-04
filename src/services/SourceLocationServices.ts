@@ -1,0 +1,406 @@
+import * as vscode from 'vscode';
+import { FunctionRef, GraphNodeRef, IRNode, LineCol, NodeType, ResolvedSourceLocation, SourceLocationTarget } from '../models/GraphDefinition';
+import { ProjectGraph } from '../models/GraphManager';
+import { SymbolRule } from '../models/SymbolRule';
+import { LSPService } from './LSPServices';
+
+export interface ResolvedSymbolInfo {
+    id: string;
+    type: NodeType;
+    name: string;
+    namespace: string;
+    uri: vscode.Uri;
+    range: vscode.Range;
+}
+
+export type SymbolCache = Map<string, vscode.DocumentSymbol[]>;
+
+export interface FindSymbolAtPositionOptions {
+    allowedKinds?: vscode.SymbolKind[];
+    includeContainers?: boolean;
+}
+
+export class SourceLocationService {
+    public static findSymbolAtPosition(
+        symbols: vscode.DocumentSymbol[],
+        position: vscode.Position,
+        options: FindSymbolAtPositionOptions = {}
+    ): vscode.DocumentSymbol | undefined {
+        const allowedKinds = options.allowedKinds ? new Set(options.allowedKinds) : undefined;
+
+        for (const symbol of symbols) {
+            if (!symbol.range.contains(position)) {
+                continue;
+            }
+
+            const child = symbol.children && symbol.children.length > 0
+                ? this.findSymbolAtPosition(symbol.children, position, options)
+                : undefined;
+            if (child) {
+                return child;
+            }
+
+            if (!allowedKinds || allowedKinds.has(symbol.kind)) {
+                return symbol;
+            }
+        }
+
+        return undefined;
+    }
+
+    public static async resolveSymbolInfo(
+        uri: vscode.Uri,
+        position: vscode.Position,
+        cache?: SymbolCache
+    ): Promise<ResolvedSymbolInfo | undefined> {
+        const uriString = uri.toString();
+        let symbols = cache?.get(uriString);
+        if (!symbols) {
+            symbols = await LSPService.getDocumentSymbols(uri);
+            if (symbols && cache) {
+                cache.set(uriString, symbols);
+            }
+        }
+        if (!symbols) {
+            return undefined;
+        }
+
+        return this.findResolvedSymbolByPosition(symbols, uriString, position, '');
+    }
+
+    public static async resolveDefinitionSymbolInfo(
+        uri: vscode.Uri,
+        position: vscode.Position,
+        cache?: SymbolCache
+    ): Promise<ResolvedSymbolInfo | undefined> {
+        let definitions = await LSPService.getDefinition(uri, position);
+        if (!definitions || definitions.length === 0) {
+            definitions = await LSPService.getTypeDefinition(uri, position);
+        }
+
+        if (!definitions || definitions.length === 0) {
+            return undefined;
+        }
+
+        for (const definition of definitions) {
+            const targetUri = 'uri' in definition ? definition.uri : definition.targetUri;
+            const targetRange = 'range' in definition ? definition.range : (definition.targetSelectionRange || definition.targetRange);
+            if (!targetRange) {
+                continue;
+            }
+
+            const targetInfo = await this.resolveSymbolInfo(targetUri, targetRange.start, cache);
+            if (targetInfo && (targetInfo.type === 'class' || targetInfo.type === 'interface')) {
+                return targetInfo;
+            }
+        }
+
+        return undefined;
+    }
+
+    public static findGraphNodesContainingPosition(
+        graph: ProjectGraph,
+        uri: string,
+        position: LineCol,
+        allowedTypes?: NodeType[]
+    ): IRNode[] {
+        const result: IRNode[] = [];
+
+        for (const node of graph.getNodesForFile(uri, allowedTypes)) {
+            if (this.containsPosition(node.location.range, position)) {
+                result.push(node);
+            }
+        }
+
+        return result.sort((left, right) => {
+            const leftSpan = this.rangeSpan(left.location.range);
+            const rightSpan = this.rangeSpan(right.location.range);
+            if (leftSpan !== rightSpan) {
+                return leftSpan - rightSpan;
+            }
+
+            return left.name.localeCompare(right.name);
+        });
+    }
+
+    public static async resolveFunctionRefAtPosition(
+        graph: ProjectGraph,
+        uri: vscode.Uri,
+        position: vscode.Position,
+        source: FunctionRef['source'] = 'editor'
+    ): Promise<FunctionRef | undefined> {
+        const uriString = uri.toString();
+        const lineCol: LineCol = { line: position.line, character: position.character };
+        const graphNode = this.findGraphNodesContainingPosition(graph, uriString, lineCol, ['function', 'method'])[0];
+        if (graphNode) {
+            return this.toFunctionRef(graphNode, source);
+        }
+
+        const symbols = await LSPService.getDocumentSymbols(uri);
+        const callable = symbols ? this.findSymbolAtPosition(symbols, position, {
+            allowedKinds: [vscode.SymbolKind.Function, vscode.SymbolKind.Method, vscode.SymbolKind.Constructor]
+        }) : undefined;
+        if (!callable) {
+            return undefined;
+        }
+
+        const matchingGraphNode = graph
+            .getNodesForFile(uriString, ['function', 'method'])
+            .find(node => node.name === callable.name
+                && node.location.range.start.line === callable.range.start.line
+                && node.location.range.start.character === callable.range.start.character);
+
+        if (matchingGraphNode) {
+            return this.toFunctionRef(matchingGraphNode, source);
+        }
+
+        const resolved = await this.resolveSymbolInfo(uri, position);
+        if (resolved && (resolved.type === 'function' || resolved.type === 'method')) {
+            return {
+                id: resolved.id,
+                label: resolved.name,
+                meta: resolved.namespace || this.summarizeUri(uriString),
+                source,
+                pendingGraphNode: true
+            };
+        }
+
+        return undefined;
+    }
+
+    public static async resolveGraphNodeRefAtPosition(
+        graph: ProjectGraph,
+        uri: vscode.Uri,
+        position: vscode.Position,
+        allowedTypes: NodeType[] = ['class', 'interface', 'function', 'method']
+    ): Promise<GraphNodeRef | undefined> {
+        return (await this.resolveGraphNodeRefsAtPosition(graph, uri, position, allowedTypes))[0];
+    }
+
+    public static async resolveGraphNodeRefsAtPosition(
+        graph: ProjectGraph,
+        uri: vscode.Uri,
+        position: vscode.Position,
+        allowedTypes: NodeType[] = ['class', 'interface', 'function', 'method']
+    ): Promise<GraphNodeRef[]> {
+        const uriString = uri.toString();
+        const lineCol: LineCol = { line: position.line, character: position.character };
+        const graphNodes = this.findGraphNodesContainingPosition(graph, uriString, lineCol, allowedTypes);
+        if (graphNodes.length > 0) {
+            return graphNodes.map(node => this.toGraphNodeRef(node));
+        }
+
+        const resolved = await this.resolveSymbolInfo(uri, position);
+        if (!resolved || !allowedTypes.includes(resolved.type)) {
+            return [];
+        }
+
+        const matchingGraphNode = graph
+            .getNodesForFile(uriString, allowedTypes)
+            .find(node => node.name === resolved.name
+                && node.type === resolved.type
+                && node.location.range.start.line === resolved.range.start.line
+                && node.location.range.start.character === resolved.range.start.character);
+
+        if (matchingGraphNode) {
+            return [this.toGraphNodeRef(matchingGraphNode)];
+        }
+
+        return [{
+            id: resolved.id,
+            label: resolved.name,
+            type: resolved.type,
+            meta: resolved.namespace || this.summarizeUri(uriString),
+            source: 'editor',
+            pendingGraphNode: true
+        }];
+    }
+
+    public static toFunctionRef(node: IRNode, source: FunctionRef['source']): FunctionRef {
+        return {
+            id: node.id,
+            label: node.signature || node.name,
+            meta: node.namespace || this.summarizeUri(node.location.uri),
+            source
+        };
+    }
+
+    public static toGraphNodeRef(node: IRNode): GraphNodeRef {
+        return {
+            id: node.id,
+            label: node.signature || node.name,
+            type: node.type,
+            meta: node.namespace || this.summarizeUri(node.location.uri),
+            source: 'editor'
+        };
+    }
+
+    public static resolveSourceLocationTarget(
+        graph: ProjectGraph,
+        target: SourceLocationTarget
+    ): ResolvedSourceLocation | undefined {
+        if (!target || !target.kind) {
+            return undefined;
+        }
+
+        if (target.kind === 'location') {
+            return target.uri && target.range
+                ? { uri: target.uri, range: target.range }
+                : undefined;
+        }
+
+        if (target.kind === 'node') {
+            return target.nodeId ? this.resolveNodeLocation(graph, target.nodeId) : undefined;
+        }
+
+        if (target.kind === 'member') {
+            return this.resolveClassMemberLocation(graph, target);
+        }
+
+        return undefined;
+    }
+
+    public static resolveNodeLocation(graph: ProjectGraph, nodeId: string): ResolvedSourceLocation | undefined {
+        const node = graph.getNode(nodeId);
+        if (!node) {
+            return undefined;
+        }
+
+        return {
+            uri: node.location.uri,
+            range: node.location.range
+        };
+    }
+
+    public static resolveClassMemberLocation(
+        graph: ProjectGraph,
+        target: SourceLocationTarget
+    ): ResolvedSourceLocation | undefined {
+        if (target.memberKind === 'method' && target.memberId) {
+            const methodLocation = this.resolveNodeLocation(graph, target.memberId);
+            if (methodLocation) {
+                return methodLocation;
+            }
+        }
+
+        const owner = target.ownerNodeId ? graph.getNode(target.ownerNodeId) : undefined;
+        if (!owner) {
+            return target.uri && target.range
+                ? { uri: target.uri, range: target.range }
+                : undefined;
+        }
+
+        if (target.range) {
+            return {
+                uri: target.uri || owner.location.uri,
+                range: target.range
+            };
+        }
+
+        if (target.memberKind === 'field' && typeof target.memberIndex === 'number') {
+            const field = owner.fields?.[target.memberIndex];
+            if (field?.range) {
+                return {
+                    uri: owner.location.uri,
+                    range: field.range
+                };
+            }
+        }
+
+        return undefined;
+    }
+
+    public static async revealSourceLocation(graph: ProjectGraph, target: SourceLocationTarget): Promise<boolean> {
+        const resolved = this.resolveSourceLocationTarget(graph, target);
+        if (!resolved) {
+            return false;
+        }
+
+        await this.revealLocation(resolved);
+        return true;
+    }
+
+    public static async revealNode(graph: ProjectGraph, nodeId: string): Promise<boolean> {
+        return this.revealSourceLocation(graph, { kind: 'node', nodeId });
+    }
+
+    public static async revealClassMember(graph: ProjectGraph, target: SourceLocationTarget): Promise<boolean> {
+        return this.revealSourceLocation(graph, { ...target, kind: 'member' });
+    }
+
+    public static async revealLocation(location: ResolvedSourceLocation): Promise<void> {
+        const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(location.uri));
+        const range = this.toVscodeRange(location.range);
+        const editor = await vscode.window.showTextDocument(document, {
+            preview: false,
+            selection: range
+        });
+        editor.selection = new vscode.Selection(range.start, range.end);
+        editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    }
+
+    public static summarizeUri(uri: string): string {
+        const parts = uri.replace(/\\/g, '/').split('/').filter(part => part.length > 0);
+        return parts.length > 0 ? parts[parts.length - 1] : uri;
+    }
+
+    private static findResolvedSymbolByPosition(
+        symbols: vscode.DocumentSymbol[],
+        uriString: string,
+        position: vscode.Position,
+        namespace: string
+    ): ResolvedSymbolInfo | undefined {
+        for (const symbol of symbols) {
+            if (!symbol.range.contains(position)) {
+                continue;
+            }
+
+            let childNamespace = namespace;
+            const nodeType = SymbolRule.mapSymbolKindToNodeType(symbol.kind);
+
+            if (nodeType || SymbolRule.isContainerSymbol(symbol.kind)) {
+                childNamespace = SymbolRule.extendNamespace(namespace, symbol.name);
+            }
+
+            const child = symbol.children && symbol.children.length > 0
+                ? this.findResolvedSymbolByPosition(symbol.children, uriString, position, childNamespace)
+                : undefined;
+            if (child) {
+                return child;
+            }
+
+            if (nodeType) {
+                return {
+                    id: SymbolRule.generateNodeId(uriString, nodeType, namespace, symbol.name),
+                    type: nodeType,
+                    name: symbol.name,
+                    namespace,
+                    uri: vscode.Uri.parse(uriString),
+                    range: symbol.range
+                };
+            }
+        }
+
+        return undefined;
+    }
+
+    private static containsPosition(range: { start: LineCol; end: LineCol }, position: LineCol): boolean {
+        const afterStart = position.line > range.start.line
+            || (position.line === range.start.line && position.character >= range.start.character);
+        const beforeEnd = position.line < range.end.line
+            || (position.line === range.end.line && position.character <= range.end.character);
+        return afterStart && beforeEnd;
+    }
+
+    private static rangeSpan(range: { start: LineCol; end: LineCol }): number {
+        return (range.end.line - range.start.line) * 100000
+            + (range.end.character - range.start.character);
+    }
+
+    private static toVscodeRange(range: { start: LineCol; end: LineCol }): vscode.Range {
+        return new vscode.Range(
+            new vscode.Position(range.start.line, range.start.character),
+            new vscode.Position(range.end.line, range.end.character)
+        );
+    }
+}

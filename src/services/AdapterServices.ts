@@ -3,7 +3,13 @@ import * as crypto from 'crypto';
 import { IRNode, NodeType, EdgeData, FileSymbolsPayload } from '../models/GraphDefinition';
 import { LSPService } from './LSPServices';
 import { InheritanceExtractor } from '../adapters/InheritanceExtractor';
+import { CompositionExtractor } from '../adapters/CompositionExtractor';
+import { DependencyExtractor } from '../adapters/DependencyExtractor';
+import { AggregationExtractor } from '../adapters/AggregationExtractor';
+import { CallExtractor } from '../adapters/CallExtractor';
+
 import { SymbolRule } from '../models/SymbolRule';
+import { logger } from '../utils/logger';
 
 export interface IndexedSymbol {
     id: string;
@@ -24,9 +30,11 @@ export class AdapterService {
      * 提取和转换指定文件的结构数据，生成给统一图数据结构的IR及其包含关系边
      */
     public static async extractFileSymbols(uri: vscode.Uri, oldFingerprint?: string): Promise<FileSymbolsPayload | undefined> {
+        logger.info(`[AdapterService.extractFileSymbols] 开始提取文件: ${uri.fsPath}`);
         const document = await vscode.workspace.openTextDocument(uri);
         const symbols = await LSPService.getDocumentSymbols(uri);
         if (!symbols) {
+            logger.warn(`[AdapterService.extractFileSymbols] 无法取得 LSP document symbols`);
             return undefined;
         }
 
@@ -40,8 +48,16 @@ export class AdapterService {
 
         this._extractBaseStructure(symbols, uriString, '', undefined, nodes, edges, symbolIndex);
 
+        logger.info(`[AdapterService.extractFileSymbols] 基础结构提取完毕: ${nodes.length} 个节点, ${edges.length} 条边`);
+        const baseEdgesByRelation: { [key: string]: number } = {};
+        for (const edge of edges) {
+            baseEdgesByRelation[edge.relation] = (baseEdgesByRelation[edge.relation] || 0) + 1;
+        }
+        logger.info(`[AdapterService.extractFileSymbols] 基础边统计: ${JSON.stringify(baseEdgesByRelation)}`);
+
         if (fingerprint === oldFingerprint) {
             // 结构指纹未变，无需进行高昂成本的定义跳转和关系重建。包含关系也不必重建，但返回空edge数组由Manager走增量。
+            logger.info(`[AdapterService.extractFileSymbols] 结构指纹未变，跳过继承关系重建`);
             return {
                 uri: uriString,
                 nodes,
@@ -53,19 +69,69 @@ export class AdapterService {
 
         // 2. 针对各大语言具体特性的类继承探测
         //在单文件查询时，所有在之后其他文件的扫描中会出现的节点在本次扫描是不可见的，所以它和被屏蔽的文件一样不会在本次adapter提交的内容中显示，在图数据结构中就都不会建立关系。所以有必要对边的目标节点新建占位符
+        logger.info(`[AdapterService.extractFileSymbols] 开始提取继承关系（语言: ${document.languageId}）`);
         const inheritanceResult = await InheritanceExtractor.extractEdges(document, symbolIndex, uriString, document.languageId);
+        logger.info(`[AdapterService.extractFileSymbols] 继承关系提取完毕: ${inheritanceResult.edges.length} 条边, ${inheritanceResult.placeholderNodes.length} 个占位符节点`);
+
+        const inheritanceEdgesByRelation: { [key: string]: number } = {};
+        for (const edge of inheritanceResult.edges) {
+            inheritanceEdgesByRelation[edge.relation] = (inheritanceEdgesByRelation[edge.relation] || 0) + 1;
+        }
+        logger.info(`[AdapterService.extractFileSymbols] 继承边统计: ${JSON.stringify(inheritanceEdgesByRelation)}`);
+
         edges.push(...inheritanceResult.edges);
         nodes.push(...inheritanceResult.placeholderNodes);
 
-        // TODO: 3. 未来在此处调用依赖组合和函数调用等Extractor分析边关系
+        logger.info(`[AdapterService.extractFileSymbols] 合并后: ${nodes.length} 个节点总数, ${edges.length} 条边总数`);
+        const finalEdgesByRelation: { [key: string]: number } = {};
+        for (const edge of edges) {
+            finalEdgesByRelation[edge.relation] = (finalEdgesByRelation[edge.relation] || 0) + 1;
+        }
+        logger.info(`[AdapterService.extractFileSymbols] 最终合并边统计: ${JSON.stringify(finalEdgesByRelation)}`);
 
-        return {
+        // 3. 组合/引用 关系抽取（成员变量提取等）
+        logger.info(`[AdapterService.extractFileSymbols] 开始提取组合关系（字段引用）`);
+        const compositionResult = await CompositionExtractor.analyze(document, symbolIndex, uriString);
+        logger.info(`[AdapterService.extractFileSymbols] 组合关系提取完毕: ${compositionResult.edges.length} 条边, ${compositionResult.placeholderNodes.length} 个占位符节点`);
+
+        edges.push(...compositionResult.edges);
+        nodes.push(...compositionResult.placeholderNodes);
+
+        // 4. 依赖 关系抽取（方法参数与返回值提取等）
+        logger.info(`[AdapterService.extractFileSymbols] 开始提取依赖关系（方法签名分析）`);
+        const dependencyResult = await DependencyExtractor.analyze(document, symbolIndex, uriString, document.languageId);
+        logger.info(`[AdapterService.extractFileSymbols] 依赖关系提取完毕: ${dependencyResult.edges.length} 条边, ${dependencyResult.placeholderNodes.length} 个占位符节点`);
+
+        edges.push(...dependencyResult.edges);
+        nodes.push(...dependencyResult.placeholderNodes);
+
+        // 5. 聚合关系抽取（外部参数写入字段）
+        logger.info(`[AdapterService.extractFileSymbols] 开始提取聚合关系（外部注入字段）`);
+        const aggregationResult = await AggregationExtractor.analyze(document, symbolIndex, uriString, document.languageId);
+        logger.info(`[AdapterService.extractFileSymbols] 聚合关系提取完毕: ${aggregationResult.edges.length} 条边, ${aggregationResult.placeholderNodes.length} 个占位符节点`);
+
+        edges.push(...aggregationResult.edges);
+        nodes.push(...aggregationResult.placeholderNodes);
+
+        // 6. 函数/方法调用关系抽取（Call Hierarchy）
+        logger.info(`[AdapterService.extractFileSymbols] 开始提取调用关系（函数/方法调用）`);
+        const callResult = await CallExtractor.analyze(document, symbolIndex, uriString);
+        logger.info(`[AdapterService.extractFileSymbols] 调用关系提取完毕: ${callResult.edges.length} 条边, ${callResult.placeholderNodes.length} 个占位符节点`);
+
+        edges.push(...callResult.edges);
+        nodes.push(...callResult.placeholderNodes);
+
+        const result: FileSymbolsPayload = {
             uri: uriString,
             nodes,
             edges,
             unchanged: false,
             fingerprint
         };
+
+        logger.info(`[AdapterService.extractFileSymbols] 返回 payload: nodes=${result.nodes.length}, edges=${result.edges.length}, extends边=${result.edges.filter(e => e.relation === 'extends').length}`);
+
+        return result;
     }
 
     /**
@@ -92,6 +158,9 @@ export class AdapterService {
                     }
                     // 收录声明头，因为里面包含改变被扫描对象之间横向关系的extends/implements短语
                     str += `${sigText};`;
+                } else if (type === 'function' || type === 'method') {
+                    // 调用图依赖函数体内容；函数体变动必须触发 calls 边重算。
+                    str += `${document.getText(sym.range)};`;
                 }
             }
             if (sym.children && sym.children.length > 0) {
@@ -127,12 +196,37 @@ export class AdapterService {
 
             const id = SymbolRule.generateNodeId(uriString, nodeType, namespace, sym.name);
 
+            // 获取类或接口的字段信息
+            let fields: { name: string; type?: string; signature?: string; range?: { start: { line: number, character: number }, end: { line: number, character: number } } }[] | undefined;
+            if (nodeType === 'class' || nodeType === 'interface') {
+                fields = [];
+                if (sym.children) {
+                    for (const child of sym.children) {
+                        if (
+                            child.kind === vscode.SymbolKind.Field ||
+                            child.kind === vscode.SymbolKind.Property ||
+                            child.kind === vscode.SymbolKind.Variable
+                        ) {
+                            fields.push({
+                                name: child.name,
+                                type: child.detail,
+                                range: {
+                                    start: { line: child.selectionRange.start.line, character: child.selectionRange.start.character },
+                                    end: { line: child.selectionRange.end.line, character: child.selectionRange.end.character }
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+
             // 构建节点
             nodes.push({
                 id,
                 name: sym.name,
                 type: nodeType,
                 namespace: namespace || undefined,
+                fields: fields && fields.length > 0 ? fields : undefined,
                 location: {
                     uri: uriString,
                     range: {

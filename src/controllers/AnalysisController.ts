@@ -1,70 +1,451 @@
 import * as vscode from 'vscode';
-import { AnalysisRuntime } from '../services/AnalysisRuntime';
 import { AnalysisViewProvider } from '../providers/AnalysisView';
+import { AnalysisRuntime } from '../services/AnalysisRuntime';
+import { SummaryCacheMissError } from '../services/SummaryArrangeServices';
+import { UiLanguageService } from '../services/UiLanguageServices';
+import { SummaryConfigService } from '../services/SummaryConfigServices';
 import { logger } from '../utils/logger';
 
 export class AnalysisController {
-    // 我们在这个控制器里持有 Runtime 的引用
     private runtime: AnalysisRuntime;
+    private cursorCandidateTimer?: ReturnType<typeof setTimeout>;
+    private cursorCandidateRequestSeq = 0;
+    private indexStatusSubscription: vscode.Disposable;
+    private configSubscription: vscode.Disposable;
 
     constructor(private readonly provider: AnalysisViewProvider, runtime?: AnalysisRuntime) {
         this.runtime = runtime || AnalysisRuntime.getInstance();
-
-        // 注册来自Webview的消息回调处理
         this.provider.setMessageHandler(this.handleWebviewMessage.bind(this));
+        this.indexStatusSubscription = this.runtime.onIndexStatusChanged(status => {
+            this.provider.postMessage({
+                command: 'analysisIndexStatusChanged',
+                status
+            });
+
+            if (status.snapshotReady && !status.isUpdating && status.suggestRequery) {
+                this.handleEditorSelectionChanged(vscode.window.activeTextEditor);
+            }
+        });
+        this.configSubscription = vscode.workspace.onDidChangeConfiguration(event => {
+            if (event.affectsConfiguration('forwarder.llm.longPressMs') ||
+                event.affectsConfiguration('forwarder.llm.summaryHoverDelayMs')) {
+                this.postSummaryUiConfig();
+            }
+            if (event.affectsConfiguration('forwarder.ui.language')) {
+                this.postUiLanguageConfig();
+            }
+        });
     }
 
-    /**
-     * 处理从前端 AnalysisView Webview 传来的交互指令
-     */
-    private async handleWebviewMessage(data: any) {
-        //TODO: 这里的指令和数据格式需要和前端约定好，目前是示例占位
+    private async handleWebviewMessage(data: any): Promise<void> {
         switch (data.command) {
             case 'queryGlobalRelation': {
-                // 前端请求如：{ command: 'queryGlobalRelation', relation: 'extends' }
-                logger.info(`[AnalysisController] 响应全局关系查询: ${data.relation}`);
-                const result = this.runtime.queryGlobalRelation(data.relation);
-
-                // 将查询到的 {nodes, edges} 异步推回前端绘制
-                this.provider.postMessage({
-                    command: 'renderGraphData',
-                    data: result
-                });
+                logger.info(`[AnalysisController] queryGlobalRelation relations=${data.relations}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                const result = await this.runtime.queryGlobalRelation(data.relations, data.includeExternal);
+                this.postRenderGraphData(data, result);
                 break;
             }
 
             case 'queryNodeDependencies': {
-                // 前端请求如：{ command: 'queryNodeDependencies', nodeId: 'Uri#class##MyClass', allowedRelations: ['extends', 'implements'] }
-                logger.info(`[AnalysisController] 响应节点局部依赖查询: ${data.nodeId}`);
-                const result = this.runtime.queryNodeDependencies(data.nodeId, data.allowedRelations);
+                logger.info(`[AnalysisController] queryNodeDependencies nodeId=${data.nodeId}, relations=${data.allowedRelations}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                const result = await this.runtime.queryNodeDependencies(data.nodeId, data.allowedRelations, data.includeExternal);
+                this.postRenderGraphData(data, result);
+                break;
+            }
 
+            case 'queryFunctionCallGraph': {
+                logger.info(`[AnalysisController] queryFunctionCallGraph nodeId=${data.nodeId}, direction=${data.direction}, depth=${data.depth}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                const result = await this.runtime.queryFunctionCallGraph(
+                    data.nodeId,
+                    data.direction,
+                    data.depth,
+                    data.includeExternal,
+                    data.maxNodes,
+                    data.maxEdges
+                );
+                this.postRenderGraphData(data, result);
+                break;
+            }
+
+            case 'queryFunctionCallPath': {
+                logger.info(`[AnalysisController] queryFunctionCallPath sourceId=${data.sourceId}, targetId=${data.targetId}, direction=${data.direction}, maxDepth=${data.maxDepth}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                const result = await this.runtime.queryFunctionCallPath(
+                    data.sourceId,
+                    data.targetId,
+                    data.direction,
+                    data.maxDepth,
+                    data.includeExternal
+                );
+                this.postRenderGraphData(data, result);
+                break;
+            }
+
+            case 'queryFunctionCallWaypointPath': {
+                logger.info(`[AnalysisController] queryFunctionCallWaypointPath nodeIds=${JSON.stringify(data.nodeIds)}, direction=${data.direction}, maxDepthPerSegment=${data.maxDepthPerSegment}, includeExternal=${data.includeExternal}, queryId=${data.__queryId}`);
+                const result = await this.runtime.queryFunctionCallWaypointPath(
+                    Array.isArray(data.nodeIds) ? data.nodeIds : [],
+                    data.direction,
+                    data.maxDepthPerSegment,
+                    data.includeExternal
+                );
+                this.postRenderGraphData(data, result);
+                break;
+            }
+
+            case 'revealSourceLocation': {
+                logger.info(`[AnalysisController] revealSourceLocation target=${JSON.stringify(data.target)}`);
+                try {
+                    const revealed = await this.runtime.revealSourceLocation(data.target);
+                    if (!revealed) {
+                        vscode.window.showWarningMessage('Unable to locate the requested source item.');
+                    }
+                } catch (error) {
+                    logger.info(`[AnalysisController] revealSourceLocation failed: ${error}`);
+                    vscode.window.showWarningMessage('Unable to locate the requested source item.');
+                }
+                break;
+            }
+
+            case 'listLLMModels': {
+                const result = await this.runtime.listLLMModels();
                 this.provider.postMessage({
-                    command: 'renderGraphData',
-                    data: result
+                    command: 'llmModelsChanged',
+                    ...result
                 });
                 break;
             }
 
+            case 'setLLMModel': {
+                const result = await this.runtime.setLLMModel(String(data.modelName || ''));
+                this.provider.postMessage({
+                    command: 'llmModelsChanged',
+                    ...result
+                });
+                break;
+            }
+
+            case 'queryFunctionSummary': {
+                const allowGenerate = data.allowGenerate !== false;
+                const reason = String(data.reason || 'unknown');
+                logger.info(`[SummaryBackend] backend-cache-query controller nodeId=${data.nodeId}, forceRefresh=${data.forceRefresh === true}, allowGenerate=${allowGenerate}, reason=${reason}`);
+                try {
+                    const summary = await this.runtime.queryFunctionSummary(
+                        String(data.nodeId || ''),
+                        data.forceRefresh === true,
+                        allowGenerate,
+                        reason
+                    );
+                    logger.info(`[SummaryBackend] backend-cache-hit controller-result nodeId=${summary.nodeId}, status=${summary.cacheStatus}, stale=${summary.stale === true}, reason=${reason}, summaryType=${typeof summary.summary}, summaryLength=${String(summary.summary || '').length}`);
+                    this.provider.postMessage({
+                        command: 'functionSummaryData',
+                        reason,
+                        ...summary
+                    });
+                } catch (error: any) {
+                    if (error instanceof SummaryCacheMissError) {
+                        logger.info(`[SummaryBackend] backend-cache-miss controller-result nodeId=${data.nodeId}, reason=${reason}, allowGenerate=${allowGenerate}`);
+                        this.provider.postMessage({
+                            command: 'functionSummaryMiss',
+                            nodeId: data.nodeId,
+                            reason,
+                            allowGenerate,
+                            forceRefresh: data.forceRefresh === true
+                        });
+                        break;
+                    }
+                    logger.info(`[SummaryBackend] backend-cache-query failed nodeId=${data.nodeId}, reason=${reason}: ${error?.message || error}`);
+                    this.provider.postMessage({
+                        command: 'functionSummaryError',
+                        nodeId: data.nodeId,
+                        reason,
+                        message: error?.message || String(error)
+                    });
+                }
+                break;
+            }
+
+            case 'queryClassSummary': {
+                const allowGenerate = data.allowGenerate !== false;
+                const reason = String(data.reason || 'unknown');
+                logger.info(`[SummaryBackend] class-summary-query controller nodeId=${data.nodeId}, forceRefresh=${data.forceRefresh === true}, allowGenerate=${allowGenerate}, reason=${reason}`);
+                try {
+                    const summary = await this.runtime.queryClassSummary(
+                        String(data.nodeId || ''),
+                        data.forceRefresh === true,
+                        allowGenerate,
+                        reason
+                    );
+                    this.provider.postMessage({
+                        command: 'functionSummaryData',
+                        reason,
+                        summaryKind: 'class',
+                        ...summary
+                    });
+                } catch (error: any) {
+                    if (error instanceof SummaryCacheMissError) {
+                        this.provider.postMessage({
+                            command: 'functionSummaryMiss',
+                            nodeId: data.nodeId,
+                            reason,
+                            allowGenerate,
+                            forceRefresh: data.forceRefresh === true
+                        });
+                        break;
+                    }
+                    this.provider.postMessage({
+                        command: 'functionSummaryError',
+                        nodeId: data.nodeId,
+                        reason,
+                        message: error?.message || String(error)
+                    });
+                }
+                break;
+            }
+
+            case 'queryFunctionCallPathSummary': {
+                const requestId = String(data.pathSummaryRequestId || data.requestId || '');
+                logger.info(`[AnalysisController] queryFunctionCallPathSummary requestId=${requestId}`);
+                try {
+                    const summary = await this.runtime.queryFunctionCallPathSummary(
+                        data.graphData,
+                        Array.isArray(data.waypointIds) ? data.waypointIds.map(String) : [],
+                        requestId
+                    );
+                    this.provider.postMessage({
+                        command: 'callPathSummaryData',
+                        ...summary
+                    });
+                } catch (error: any) {
+                    this.provider.postMessage({
+                        command: 'callPathSummaryError',
+                        requestId,
+                        message: error?.message || String(error)
+                    });
+                }
+                break;
+            }
+
+            case 'getFunctionSummaryHistory': {
+                try {
+                    logger.info(`[AnalysisController] getFunctionSummaryHistory nodeId=${data.nodeId}, modelName=${data.modelName || '*'}`);
+                    const history = await this.runtime.getFunctionSummaryHistory(
+                        String(data.nodeId || ''),
+                        data.modelName ? String(data.modelName) : undefined
+                    );
+                    this.provider.postMessage({
+                        command: 'functionSummaryHistory',
+                        ...history
+                    });
+                } catch (error: any) {
+                    this.provider.postMessage({
+                        command: 'functionSummaryError',
+                        nodeId: data.nodeId,
+                        message: error?.message || String(error)
+                    });
+                }
+                break;
+            }
+
+            case 'requestSummaryUiConfig': {
+                this.postSummaryUiConfig();
+                break;
+            }
+
+            case 'requestUiLanguage': {
+                this.postUiLanguageConfig();
+                break;
+            }
+
             default:
-                logger.info(`[AnalysisController] 未知的前端指令: ${data.command}`);
+                logger.info(`[AnalysisController] unknown webview command: ${data.command}`);
                 break;
         }
     }
 
-    /**
-     * TODO: 入口：对用户当前打开/激活的文件执行图分析收集
-     */
+    private postRenderGraphData(request: any, result: unknown): void {
+        this.provider.postMessage({
+            command: 'renderGraphData',
+            data: result,
+            __queryId: request.__queryId,
+            __queryMode: request.__queryMode,
+            __querySignature: request.__querySignature,
+            pathSummaryRequestId: request.pathSummaryRequestId
+        });
+    }
+
+    private postSummaryUiConfig(): void {
+        const configuration = vscode.workspace.getConfiguration('forwarder.llm');
+        const summaryConfig = SummaryConfigService.read(configuration);
+        this.provider.postMessage({
+            command: 'summaryUiConfigChanged',
+            hoverDelayMs: summaryConfig.ui.hoverDelayMs,
+            longPressMs: summaryConfig.ui.longPressMs
+        });
+    }
+
+    private postUiLanguageConfig(): void {
+        const configuredValue = vscode.workspace.getConfiguration('forwarder.ui').get('language', 'auto');
+        const resolution = UiLanguageService.resolveLanguage(configuredValue, vscode.env.language);
+        this.provider.postMessage({
+            command: 'uiLanguageChanged',
+            ...resolution
+        });
+    }
+
     public async handleAnalyzeActiveFileCommand(): Promise<void> {
         const editor = vscode.window.activeTextEditor;
-        if (editor) {
-            try {
-                await this.runtime.analyzeFile(editor.document.uri);
-                vscode.window.showInformationMessage("当前文件代码结构分析完成，已存入缓存图中。");
-            } catch (error) {
-                vscode.window.showErrorMessage(`分析文件出错: ${editor.document.uri.fsPath}`);
+        if (!editor) {
+            vscode.window.showWarningMessage('No active editor to analyze.');
+            return;
+        }
+
+        try {
+            await this.runtime.analyzeFile(editor.document.uri);
+            vscode.window.showInformationMessage('Analyzed active file.');
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to analyze active file: ${error}`);
+        }
+    }
+
+    public async handleAddActiveFunctionToCallPathCommand(): Promise<void> {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage('No active editor.');
+            return;
+        }
+
+        try {
+            const functionRef = await this.runtime.resolveFunctionAtEditorPosition(editor.document.uri, editor.selection.active);
+            if (!functionRef) {
+                vscode.window.showWarningMessage('No function or method found at the current cursor position.');
+                return;
             }
-        } else {
-            vscode.window.showWarningMessage("未检测到活跃的编辑器文件。");
+
+            await vscode.commands.executeCommand('workbench.view.extension.forwarder-sidebar');
+            this.provider.postMessage({
+                command: 'addFunctionToCallPath',
+                functionRef
+            });
+            vscode.window.showInformationMessage(`Added to call path: ${functionRef.label}`);
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to add function to call path: ${error}`);
+        }
+    }
+
+    public async handleSetActiveFunctionAsCallCenterCommand(): Promise<void> {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage('No active editor.');
+            return;
+        }
+
+        try {
+            const functionRef = await this.runtime.resolveFunctionAtEditorPosition(editor.document.uri, editor.selection.active);
+            if (!functionRef) {
+                vscode.window.showWarningMessage('No function or method found at the current cursor position.');
+                return;
+            }
+
+            await vscode.commands.executeCommand('workbench.view.extension.forwarder-sidebar');
+            this.provider.postMessage({
+                command: 'setCallGraphCenter',
+                functionRef
+            });
+            vscode.window.showInformationMessage(`Set call graph center: ${functionRef.label}`);
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to set call graph center: ${error}`);
+        }
+    }
+
+    public async handleSummarizeActiveFunctionCommand(): Promise<void> {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage('No active editor.');
+            return;
+        }
+
+        try {
+            await vscode.commands.executeCommand('workbench.view.extension.forwarder-sidebar');
+            const summaryData = await this.runtime.summarizeFunctionAtEditorPosition(editor.document.uri, editor.selection.active);
+            if (!summaryData) {
+                vscode.window.showWarningMessage('No indexed function or method found at the current cursor position.');
+                this.provider.postMessage({
+                    command: 'functionSummaryError',
+                    message: 'No indexed function or method found at the current cursor position.'
+                });
+                return;
+            }
+
+            this.provider.postMessage({
+                command: 'functionSummaryData',
+                reason: 'debug-command',
+                ...summaryData
+            });
+            vscode.window.showInformationMessage(`Summary ready: ${summaryData.label}`);
+        } catch (error: any) {
+            const message = error?.message || String(error);
+            this.provider.postMessage({
+                command: 'functionSummaryError',
+                message
+            });
+            vscode.window.showErrorMessage(`Failed to summarize active function: ${message}`);
+        }
+    }
+
+    public handleEditorSelectionChanged(editor: vscode.TextEditor | undefined): void {
+        if (this.cursorCandidateTimer) {
+            clearTimeout(this.cursorCandidateTimer);
+        }
+
+        const requestSeq = ++this.cursorCandidateRequestSeq;
+        this.cursorCandidateTimer = setTimeout(() => {
+            this.postCursorFunctionCandidate(editor, requestSeq).catch(error => {
+                logger.info(`[AnalysisController] cursor function candidate failed: ${error}`);
+            });
+        }, 180);
+    }
+
+    private async postCursorFunctionCandidate(editor: vscode.TextEditor | undefined, requestSeq: number): Promise<void> {
+        if (requestSeq !== this.cursorCandidateRequestSeq) {
+            return;
+        }
+
+        if (!editor) {
+            this.provider.postMessage({
+                command: 'cursorFunctionCandidateChanged',
+                functionRef: undefined
+            });
+            this.provider.postMessage({
+                command: 'cursorGraphNodeCandidateChanged',
+                graphNodeRef: undefined
+            });
+            return;
+        }
+
+        const [functionRef, graphNodeRefs] = await Promise.all([
+            this.runtime.resolveFunctionAtEditorPosition(editor.document.uri, editor.selection.active),
+            this.runtime.resolveGraphNodesAtEditorPosition(editor.document.uri, editor.selection.active)
+        ]);
+        if (requestSeq !== this.cursorCandidateRequestSeq) {
+            return;
+        }
+
+        this.provider.postMessage({
+            command: 'cursorFunctionCandidateChanged',
+            functionRef
+        });
+        this.provider.postMessage({
+            command: 'cursorGraphNodeCandidateChanged',
+            graphNodeRef: graphNodeRefs[0],
+            graphNodeRefs
+        });
+    }
+
+    public dispose(): void {
+        this.indexStatusSubscription.dispose();
+        this.configSubscription.dispose();
+        if (this.cursorCandidateTimer) {
+            clearTimeout(this.cursorCandidateTimer);
         }
     }
 }

@@ -1,9 +1,12 @@
 # Change Log
 
-All notable changes to the "forwarder" extension will be documented in this file.
+All notable changes to the "Forwarder" extension will be documented in this file.
 
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+## [0.0.1]
 
-## [Unreleased]
-
-- Initial release
+- Initial release.
+- Added interactive Class Graph and Call Graph views.
+- Added ordered call path queries and call path summaries.
+- Added function, method, class, and interface summaries through the VS Code Language Model API.
+- Added workspace-level incremental indexing and local summary caching.
+- Added Chinese and English Webview UI localization.

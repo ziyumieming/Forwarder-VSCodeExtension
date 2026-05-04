@@ -1,4 +1,43 @@
 (function () {
+    function readQueryOptions() {
+        const extendsChecked = document.getElementById('rel-extends')?.checked ?? false;
+        const implementsChecked = document.getElementById('rel-implements')?.checked ?? false;
+        const composesChecked = document.getElementById('rel-composes')?.checked ?? false;
+        const dependencyChecked = document.getElementById('rel-dependency')?.checked ?? false;
+        const aggregatesChecked = document.getElementById('rel-aggregates')?.checked ?? false;
+        const includeExternal = document.getElementById('include-external')?.checked ?? false;
+
+        const relations = [];
+        if (extendsChecked) {
+            relations.push('extends');
+        }
+        if (implementsChecked) {
+            relations.push('implements');
+        }
+        if (composesChecked) {
+            relations.push('composes');
+        }
+        if (dependencyChecked) {
+            relations.push('uses');
+        }
+        if (aggregatesChecked) {
+            relations.push('aggregates');
+        }
+
+        return {
+            relations,
+            includeExternal
+        };
+    }
+
+    function readClassCardOptions() {
+        return {
+            showFields: true,
+            showMethods: true,
+            collapsedSections: []
+        };
+    }
+
     const AnalysisUI = {
         register(handlers) {
             const fitBtn = document.getElementById('btn-fit');
@@ -10,6 +49,14 @@
             layoutBtn?.addEventListener('click', handlers?.onLayout);
             resetBtn?.addEventListener('click', handlers?.onReset);
             queryBtn?.addEventListener('click', handlers?.onQueryGlobalRelation);
+        },
+
+        getQueryOptions() {
+            return readQueryOptions();
+        },
+
+        getClassCardOptions() {
+            return readClassCardOptions();
         }
     };
 

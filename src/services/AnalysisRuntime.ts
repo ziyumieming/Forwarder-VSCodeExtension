@@ -1,17 +1,22 @@
 import * as vscode from 'vscode';
 import { ProjectGraph } from '../models/GraphManager';
 import { AdapterService } from './AdapterServices';
-import { ViewQueryService } from './ViewServices';
+import { CallGraphDirection, ViewQueryService } from './ViewServices';
 import { SynchronizationService } from './SynchronizationServices';
 import { GatingService } from './GatingServices';
-import { EdgeRelation, GraphViewData } from '../models/GraphDefinition';
+import { AnalysisIndexStatus, CallPathSummaryResult, ClassSummaryData, EdgeRelation, FunctionRef, FunctionSummaryData, GraphNodeRef, GraphViewData, NodeType, SourceLocationTarget } from '../models/GraphDefinition';
+import { SourceLocationService } from './SourceLocationServices';
+import { AnalysisIndexStatusService } from './StatusServices';
 import { logger } from '../utils/logger';
-
-export interface AnalysisTask {
-    uri: vscode.Uri;
-    reason: string;
-    cascade: boolean;
-}
+import { FunctionSummaryDependencyResult, SummaryArrangeService } from './SummaryArrangeServices';
+import { SummaryStorageService } from './SummaryStorageServices';
+import { SummaryCacheService } from './SummaryCacheServices';
+import { SummaryQueueService } from './SummaryQueueServices';
+import { LLMModelInfo, LLMModelService } from './LLMModelServices';
+import { SummaryContextService } from './SummaryContextServices';
+import { AnalysisTask, GraphAnalysisQueueService } from './GraphQueueServices';
+import { PromptLanguageService, SummaryLanguage } from './UiLanguageServices';
+import { SummaryConfigService, SummaryRuntimeConfig } from './SummaryConfigServices';
 
 export class AnalysisRuntime {
     private static instance: AnalysisRuntime;
@@ -28,15 +33,32 @@ export class AnalysisRuntime {
     private saveListener?: vscode.Disposable;
     private createListener?: vscode.Disposable;
 
-    // 分析调度队列
-    private taskQueue: AnalysisTask[] = [];
-    private uncommittedTasks: Map<string, AnalysisTask> = new Map();
-    private isProcessing: boolean = false;
-    private activeTask?: AnalysisTask;
     private pendingDeletions: Map<string, NodeJS.Timeout> = new Map();
+    private analysisGeneration: number = 0;
+
+    private readonly indexStatusService = new AnalysisIndexStatusService();
+    private readonly graphQueue: GraphAnalysisQueueService;
+    private summaryStorageService?: SummaryStorageService;
+    private summaryCacheService?: SummaryCacheService;
+    private summaryQueueService?: SummaryQueueService;
+    private summaryRuntimeConfig: SummaryRuntimeConfig = SummaryConfigService.DEFAULTS;
+    private llmModelService?: LLMModelService;
+    private llmInitialization?: Promise<void>;
 
     private constructor() {
         this.projectGraph = new ProjectGraph();
+        this.graphQueue = new GraphAnalysisQueueService({
+            getGeneration: () => this.analysisGeneration,
+            processTask: task => this.processAnalysisTask(task),
+            onStatusChanged: () => this.emitIndexStatus(),
+            onIdle: async hasUncommittedTasks => {
+                if (hasUncommittedTasks && this.syncService) {
+                    await this.syncService.saveSnapshot(this.projectGraph);
+                    logger.info('[AnalysisRuntime] 调度队列全部处理完成，数据流更新并固化本地完毕！');
+                }
+            },
+            onDrained: () => this.emitIndexStatus({ suggestRequery: true })
+        });
     }
 
     public static getInstance(): AnalysisRuntime {
@@ -46,11 +68,38 @@ export class AnalysisRuntime {
         return AnalysisRuntime.instance;
     }
 
+    public onIndexStatusChanged(listener: (status: AnalysisIndexStatus) => void): vscode.Disposable {
+        return this.indexStatusService.onStatusChanged(listener);
+    }
+
+    public getIndexStatus(overrides: Partial<AnalysisIndexStatus> = {}): AnalysisIndexStatus {
+        return this.indexStatusService.getStatus(overrides);
+    }
+
+    private emitIndexStatus(overrides: Partial<AnalysisIndexStatus> = {}): void {
+        const queueStatus = this.graphQueue.getStatus();
+        this.indexStatusService.updateQueueState({
+            isUpdating: queueStatus.isProcessing || queueStatus.queueLength > 0,
+            queueLength: queueStatus.queueLength,
+            activeTask: queueStatus.activeTask ? queueStatus.activeTask.uri.toString() : undefined,
+            generation: this.analysisGeneration
+        }, overrides);
+    }
+
+    private markSnapshotReady(): void {
+        this.indexStatusService.markSnapshotReady();
+    }
+
+    private attachIndexStatus(result: GraphViewData): GraphViewData {
+        return this.indexStatusService.attachToGraphView(result);
+    }
+
     /**
-     * 运行时初始化：传入持久化路径（如 context.globalStorageUri 或者 workspaceStorageUri）
+     * 运行时初始化：工作区级 storageDir 用于项目索引和摘要缓存，全局 llmModelStorageDir 用于模型 manifest。
      */
-    public initialize(storageDir: string, isSingleFileMode: boolean = false, singleFileUri?: string) {
+    public initialize(storageDir: string, isSingleFileMode: boolean = false, singleFileUri?: string, llmModelStorageDir: string = storageDir) {
         this.syncService = new SynchronizationService(storageDir, isSingleFileMode, singleFileUri);
+        this.initializeLLMSupport(storageDir, llmModelStorageDir);
 
         // 注册设置修改监听器
         if (this.configChangeListener) {
@@ -63,10 +112,15 @@ export class AnalysisRuntime {
                 if (this.syncService) {
                     await this.syncService.clearIndex();
                 }
+                this.analysisGeneration++;
                 this.projectGraph.clearAll();
+                this.resetSnapshotReadyPromise();
                 this.runIncrementalSync().catch(err => {
                     logger.info(`[AnalysisRuntime] 重新扫描失败: ${err}`);
                 });
+            }
+            if (e.affectsConfiguration('forwarder.llm')) {
+                this.initializeLLMSupport(storageDir, llmModelStorageDir);
             }
         });
 
@@ -77,7 +131,8 @@ export class AnalysisRuntime {
         this.renameListener = vscode.workspace.onDidRenameFiles(async e => {
             for (const file of e.files) {
                 logger.info(`[AnalysisRuntime] 检测到文件重命名: ${file.oldUri.fsPath} -> ${file.newUri.fsPath}`);
-                this.projectGraph.renameFile(file.oldUri.toString(), file.newUri.toString());
+                const idMap = this.projectGraph.renameFile(file.oldUri.toString(), file.newUri.toString());
+                await this.renameSummariesForRenamedNodes(idMap);
                 if (this.syncService) {
                     await this.syncService.renameFileInIndex(file.oldUri, file.newUri);
                     // 不再需要触发此文件的重新扫描，因为仅更名未改变内容
@@ -85,7 +140,7 @@ export class AnalysisRuntime {
             }
 
             // 为保证重命名状态尽快固化，在没有任务积压时执行一遍快照
-            if (this.taskQueue.length === 0 && !this.isProcessing && this.syncService) {
+            if (!this.graphQueue.hasPendingWork() && this.syncService) {
                 this.syncService.saveSnapshot(this.projectGraph);
             }
         });
@@ -107,10 +162,6 @@ export class AnalysisRuntime {
         }
         this.createListener = vscode.workspace.onDidCreateFiles(async e => {
             for (const file of e.files) {
-                const uriStr = file.toString();
-                if (this.syncService) {
-                    await this.syncService.addOrUpdateFileInIndex(file);
-                }
                 this.enqueueTask(file, '监听发现文件新增', true);//在队列的开头会取消等待的删除
             }
         });
@@ -122,9 +173,6 @@ export class AnalysisRuntime {
         this.saveListener = vscode.workspace.onDidSaveTextDocument(async doc => {
             if (doc.uri.scheme === 'file') {
                 logger.info(`[AnalysisRuntime] 文件保存触发重扫: ${doc.uri.fsPath}`);
-                if (this.syncService) {
-                    await this.syncService.addOrUpdateFileInIndex(doc.uri);
-                }
                 this.enqueueTask(doc.uri, '文件保存后触发重新同步解析', true);
             }
         });
@@ -152,8 +200,11 @@ export class AnalysisRuntime {
     private async executeDeletion(uri: vscode.Uri): Promise<void> {
         logger.info(`[AnalysisRuntime] 执行文件图结构删除与级联清理: ${uri.fsPath}`);
 
+        const removedNodeIds = this.projectGraph.getNodesForFile(uri.toString(), ['function', 'method']).map(node => node.id);
+
         // 1. 将删除事实同步给图管理器，得到被影响的文件
         const affectedUris = this.projectGraph.deleteFileSymbols(uri.toString());
+        await this.cleanupSummariesForRemovedNodes(removedNodeIds);
 
         // 2. 从本地缓存索引中移除该文件
         if (this.syncService) {
@@ -169,20 +220,9 @@ export class AnalysisRuntime {
         }
 
         // 如果没有波及其他文件，队列为空，我们也必须在此当即固化一次快照，以确保图节点删除得到持久化
-        if (this.taskQueue.length === 0 && !this.isProcessing && this.syncService) {
+        if (!this.graphQueue.hasPendingWork() && this.syncService) {
             await this.syncService.saveSnapshot(this.projectGraph);
         }
-    }
-
-    /**
-     * 获取支持JSON序列化的任务队列结构
-     */
-    private getSerializableTasks(): { uri: string, reason: string, cascade: boolean }[] {
-        return this.taskQueue.map(t => ({
-            uri: t.uri.toString(),
-            reason: t.reason,
-            cascade: t.cascade
-        }));
     }
 
     /**
@@ -193,82 +233,94 @@ export class AnalysisRuntime {
             throw new Error('[AnalysisRuntime] 尚未初始化 storagePath，无法运行增量扫描。');
         }
 
-        logger.info('[AnalysisRuntime] 开始启动增量同步...');
+        const syncGeneration = this.analysisGeneration;
 
-        // 0. 校验持久化架构版本和单文件作用域变化，判断是否需要重置存储
-        const didWipe = await this.syncService.checkAndInitManifest();
-        if (didWipe) {
-            logger.info('[AnalysisRuntime] 侦测到缓存已被擦除，将进行全量冷启动。');
-            // 清理本身的索引并让图为空
-            this.projectGraph.clearAll();
-        }
+        try {
+            logger.info('[AnalysisRuntime] 开始启动增量同步...');
 
-        // 1. 加载本地持久化快照与积压队列
-        if (!didWipe) {
-            await this.syncService.loadSnapshot(this.projectGraph);
-            await this.syncService.loadFileIndex();
-        }
-
-        // 2. 将快照中的索引与当前工作区真实文件对比
-        const changes = await this.syncService.scanWorkspaceChanges();
-        logger.info(`[AnalysisRuntime] 扫描完毕。发现重命名文件: ${changes.renamed?.length || 0}个, 需分析文件: ${changes.addedOrModified.length}个, 被删除文件: ${changes.deleted.length}个.`);
-
-        if (changes.renamed && changes.renamed.length > 0) {
-            for (const rename of changes.renamed) {
-                logger.info(`[AnalysisRuntime] 处理文件重命名 (增量同步): ${rename.oldUri.fsPath} -> ${rename.newUri.fsPath}`);
-                this.projectGraph.renameFile(rename.oldUri.toString(), rename.newUri.toString());
-                await this.syncService.removeFileFromIndex(rename.oldUri);
+            // 0. 校验持久化架构版本和单文件作用域变化，判断是否需要重置存储
+            const didWipe = await this.syncService.checkAndInitManifest();
+            if (didWipe) {
+                logger.info('[AnalysisRuntime] 侦测到缓存已被擦除，将进行全量冷启动。');
+                // 清理本身的索引并让图为空
+                this.projectGraph.clearAll();
             }
-        }
 
-        // 3. 加载历史遗留挂起任务与未固化任务
-        const pendingTasks = this.syncService.loadPendingTasksSync();
-        if (pendingTasks.length > 0) {
-            logger.info(`[AnalysisRuntime] 发现上次退出时未处理完及未固化的任务，共 ${pendingTasks.length} 个，正在恢复...`);
-            for (const pt of pendingTasks) {
-                let targetUriStr = pt.uriStr;
-                // 检查是否在离线期间被并且成功识别为了重命名
-                if (changes.renamed) {
-                    const renameRecord = changes.renamed.find(r => r.oldUri.toString() === pt.uriStr);
-                    if (renameRecord) {
-                        targetUriStr = renameRecord.newUri.toString();
-                        logger.info(`[AnalysisRuntime] 追回已重命名的挂起任务: ${pt.uriStr} -> ${targetUriStr}`);
+            // 1. 加载本地持久化快照与积压队列
+            if (!didWipe) {
+                await this.syncService.loadSnapshot(this.projectGraph);
+                await this.syncService.loadFileIndex();
+            }
+
+            this.markSnapshotReady();
+
+            // 2. 将快照中的索引与当前工作区真实文件对比
+            const changes = await this.syncService.scanWorkspaceChanges();
+            logger.info(`[AnalysisRuntime] 扫描完毕。发现重命名文件: ${changes.renamed?.length || 0}个, 需分析文件: ${changes.addedOrModified.length}个, 被删除文件: ${changes.deleted.length}个.`);
+
+            if (changes.renamed && changes.renamed.length > 0) {
+                for (const rename of changes.renamed) {
+                    logger.info(`[AnalysisRuntime] 处理文件重命名 (增量同步): ${rename.oldUri.fsPath} -> ${rename.newUri.fsPath}`);
+                    const idMap = this.projectGraph.renameFile(rename.oldUri.toString(), rename.newUri.toString());
+                    await this.renameSummariesForRenamedNodes(idMap);
+                    await this.syncService.removeFileFromIndex(rename.oldUri);
+                }
+            }
+
+            // 3. 加载历史遗留挂起任务与未固化任务
+            const pendingTasks = this.syncService.loadPendingTasksSync();
+            if (pendingTasks.length > 0) {
+                logger.info(`[AnalysisRuntime] 发现上次退出时未处理完及未固化的任务，共 ${pendingTasks.length} 个，正在恢复...`);
+                for (const pt of pendingTasks) {
+                    let targetUriStr = pt.uriStr;
+                    // 检查是否在离线期间被并且成功识别为了重命名
+                    if (changes.renamed) {
+                        const renameRecord = changes.renamed.find(r => r.oldUri.toString() === pt.uriStr);
+                        if (renameRecord) {
+                            targetUriStr = renameRecord.newUri.toString();
+                            logger.info(`[AnalysisRuntime] 追回已重命名的挂起任务: ${pt.uriStr} -> ${targetUriStr}`);
+                        }
+                    }
+
+                    try {
+                        const uri = vscode.Uri.parse(targetUriStr);
+                        // 仅当文件存在于磁盘时，才进行重检查恢复
+                        await vscode.workspace.fs.stat(uri);
+                        this.enqueueTask(uri, `[自动恢复未固化任务] ${pt.reason}`, pt.cascade);
+                    } catch (err: any) {
+                        logger.info(`[AnalysisRuntime] 挂起任务文件已丢失或不可读，跳过恢复: ${targetUriStr}`);
                     }
                 }
-
-                try {
-                    const uri = vscode.Uri.parse(targetUriStr);
-                    // 仅当文件存在于磁盘时，才进行重检查恢复
-                    await vscode.workspace.fs.stat(uri);
-                    this.enqueueTask(uri, `[自动恢复未固化任务] ${pt.reason}`, pt.cascade);
-                } catch (err: any) {
-                    logger.info(`[AnalysisRuntime] 挂起任务文件已丢失或不可读，跳过恢复: ${targetUriStr}`);
-                }
             }
-        }
 
-        // 4. 处理按需更新文件 (入队)
-        for (const uri of changes.addedOrModified) {
-            this.enqueueTask(uri, '增量扫描发现文件修改/新增', true);
-        }
+            // 4. 处理按需更新文件 (入队)
+            for (const uri of changes.addedOrModified) {
+                this.enqueueTask(uri, '增量扫描发现文件修改/新增', true);
+            }
 
-        // 5. 处理被删除的文件 （直接执行，脱机删除不需要防抖）
-        for (const uri of changes.deleted) {
-            logger.info(`[AnalysisRuntime] 增量发现文件已删除: ${uri.fsPath}`);
-            await this.executeDeletion(uri);
-        }
+            // 5. 处理被删除的文件 （直接执行，脱机删除不需要防抖）
+            for (const uri of changes.deleted) {
+                logger.info(`[AnalysisRuntime] 增量发现文件已删除: ${uri.fsPath}`);
+                await this.executeDeletion(uri);
+            }
 
-        // 若队列中没有任务，直接保存快照；否则通过队列后续保存
-        if (this.taskQueue.length === 0 && !this.isProcessing) {
-            await this.syncService.saveSnapshot(this.projectGraph);
-            logger.info('[AnalysisRuntime] 增量同步完成！无新增更新项。');
+            // 若队列中没有任务，直接保存快照；否则通过队列后续保存
+            if (!this.graphQueue.hasPendingWork()) {
+                await this.syncService.saveSnapshot(this.projectGraph);
+                logger.info('[AnalysisRuntime] 增量同步完成！无新增更新项。');
+            }
+        } finally {
+            this.markSnapshotReady();
+            await this.graphQueue.waitForIdle(syncGeneration);
+            this.emitIndexStatus({ suggestRequery: true });
+            logger.info('[AnalysisRuntime] 初始启动数据载入和分析队列处理完成。');
         }
     }
 
     /**
      * 将文件分析任务推入调度队列
      */
-    public enqueueTask(uri: vscode.Uri, reason: string, cascade: boolean = true): void {
+    public enqueueTask(uri: vscode.Uri, reason: string, cascade: boolean = true, generation: number = this.analysisGeneration): void {
         const uriStr = uri.toString();
 
         // 当文件被加入分析队列（创建/更新）时，取消它可能正在倒计时的假删除/撤回删除
@@ -279,81 +331,29 @@ export class AnalysisRuntime {
             //TODO: 无修改入队会发生什么？是否只有创建会触发这个分支？
         }
 
-        const existingIndex = this.taskQueue.findIndex(t => t.uri.toString() === uriStr);
-
-        if (existingIndex >= 0) {
-            // 如果已在队列中，提权其级联属性。发生于波及文件被修改时
-            if (cascade && !this.taskQueue[existingIndex].cascade) {
-                this.taskQueue[existingIndex].cascade = true;
-                this.taskQueue[existingIndex].reason = reason;
-            }
-        } else {
-            this.taskQueue.push({ uri, reason, cascade });
-        }
-
-        // 尝试启动异步消费
-        this._processTaskQueue().catch(err => {
-            logger.info(`[AnalysisRuntime] 队列处理异常: ${err.message}`);
-        });
+        this.graphQueue.enqueue(uri, reason, cascade, generation);
     }
 
     /**
-     * 消费队列的任务循环
+     * 执行单个队列任务中仍属于运行时编排的语言服务等待、文件解析与索引提交。
      */
-    private async _processTaskQueue(): Promise<void> {
-        if (this.isProcessing) {
-            return;
+    private async processAnalysisTask(task: AnalysisTask): Promise<string[] | undefined> {
+        const isReady = await GatingService.waitAndCheckLSPForFile(task.uri);
+        if (!isReady) {
+            logger.info(`[AnalysisRuntime] 无法挂载语言服务或文件被阻止，跳过此文件: ${task.uri.fsPath}`);
+            return undefined;
         }
-        this.isProcessing = true;
 
-        try {
-            while (this.taskQueue.length > 0) {
-                this.activeTask = this.taskQueue.shift()!;
-                const task = this.activeTask;
-                // 记录到未提交集合，供突发退出时追回
-                this.uncommittedTasks.set(task.uri.toString(), task);
-                logger.info(`[AnalysisRuntime] 分析队列执行文件: ${task.uri.fsPath} (原因: ${task.reason})`);
-
-                try {
-                    const isReady = await GatingService.waitAndCheckLSPForFile(task.uri);
-                    if (!isReady) {
-                        logger.info(`[AnalysisRuntime] 无法挂载语言服务或文件被阻止，跳过此文件: ${task.uri.fsPath}`);
-                        this.activeTask = undefined;
-                        continue;
-                    }
-
-                    const affectedUris = await this.doAnalyzeFile(task.uri);
-
-                    // 5. 如果开启了级联发现相关被波及文件，需要入队重新扫描它，但它的结果不再级联
-                    if (task.cascade && affectedUris && affectedUris.length > 0) {
-                        for (const affectedUriStr of affectedUris) {
-                            const affectedUri = vscode.Uri.parse(affectedUriStr);
-                            this.enqueueTask(affectedUri, `依赖的源文件 ${task.uri.fsPath} 结构变更的级联更新`, false);
-                        }
-                    }
-                } catch (err: any) {
-                    logger.info(`[AnalysisRuntime] 忽略解析失败的文件 ${task.uri.fsPath}: ${err.message}`);
-                }
-
-                this.activeTask = undefined;
-            }
-
-            // 队列全部消费完毕后，固化保存最新的全图一次
-            if (this.syncService && this.uncommittedTasks.size > 0) {
-                await this.syncService.saveSnapshot(this.projectGraph);
-                this.uncommittedTasks.clear(); // 保存成功后清空未提交记录
-                logger.info('[AnalysisRuntime] 调度队列全部处理完成，数据流更新并固化本地完毕！');
-            }
-        } finally {
-            this.isProcessing = false;
-
-            // 防御性检查：如果在固化快照（await）等异步操作期间又有新任务入队，则重新启动处理
-            if (this.taskQueue.length > 0) {
-                this._processTaskQueue().catch(err => {
-                    logger.info(`[AnalysisRuntime] 追加队列处理异常: ${err.message}`);
-                });
-            }
+        const affectedUris = await this.doAnalyzeFile(task.uri, task.generation);
+        if (!affectedUris) {
+            return undefined;
         }
+
+        if (this.syncService) {
+            await this.syncService.commitFileToIndex(task.uri);
+        }
+
+        return affectedUris;
     }
 
     /**
@@ -367,18 +367,24 @@ export class AnalysisRuntime {
      * 真正的内部控制流: 分析并将单个文件及其内部关系存入图数据结构
      * @param uri 目标文件的 Uri
      */
-    private async doAnalyzeFile(uri: vscode.Uri): Promise<string[]> {
+    private async doAnalyzeFile(uri: vscode.Uri, generation: number): Promise<string[] | undefined> {
         logger.info(`[AnalysisRuntime] 正在进行文件实质性解析: ${uri.fsPath}`);
 
         // 从缓存中获取之前的结构指纹
         const oldFingerprint = this.projectGraph.fileFingerprints.get(uri.toString());
+        const oldSummaryNodeIds = this.projectGraph.getNodesForFile(uri.toString(), ['function', 'method']).map(node => node.id);
 
         // 1. 调用适配器服务，从LSP提取并组装指定文件的 IRNode 与内部关系边界
         const payload = await AdapterService.extractFileSymbols(uri, oldFingerprint);
 
+        if (generation !== this.analysisGeneration) {
+            logger.info(`[AnalysisRuntime] 丢弃旧世代解析结果: ${uri.fsPath}`);
+            return undefined;
+        }
+
         if (!payload || payload.nodes.length === 0) {
             logger.info(`[AnalysisRuntime] 未能从 ${uri.fsPath} 提取到结构信息或文件为空。`);
-            return [];
+            return undefined;
         }
 
         // 提前阻断: 结构语义未发生本质改变
@@ -390,19 +396,314 @@ export class AnalysisRuntime {
 
         // 2. 数据下沉，返回可能受影响的依赖此文件的其他文档的 URI
         const affectedUris = this.projectGraph.updateFileSymbols(payload);
+        const currentSummaryNodeIds = new Set(this.projectGraph.getNodesForFile(uri.toString(), ['function', 'method']).map(node => node.id));
+        const removedSummaryNodeIds = oldSummaryNodeIds.filter(nodeId => !currentSummaryNodeIds.has(nodeId));
+        await this.cleanupSummariesForRemovedNodes(removedSummaryNodeIds);
 
         logger.info(`[AnalysisRuntime] 更新图缓存成功，新增/更新节点 ${payload.nodes.length} 个，关系边 ${payload.edges.length} 条，影响旁支文件 ${affectedUris.length} 个。`);
         return affectedUris;
     }
 
+    private async cleanupSummariesForRemovedNodes(nodeIds: string[]): Promise<void> {
+        if (nodeIds.length === 0 || !this.summaryCacheService) {
+            return;
+        }
+
+        const uniqueNodeIds = Array.from(new Set(nodeIds));
+        const removed = await this.summaryCacheService.removeSummariesForTargets('function', uniqueNodeIds);
+        const removedMethods = await this.summaryCacheService.removeSummariesForTargets('method', uniqueNodeIds);
+        const removedRecords = removed.removedRecords + removedMethods.removedRecords;
+        if (removedRecords > 0) {
+            logger.info(`[AnalysisRuntime] 已清理失效节点摘要: nodes=${uniqueNodeIds.length}, records=${removedRecords}`);
+        }
+    }
+
+    private async renameSummariesForRenamedNodes(idMap: Map<string, string>): Promise<void> {
+        if (idMap.size === 0 || !this.summaryCacheService) {
+            return;
+        }
+
+        const result = await this.summaryCacheService.renameTargets(idMap);
+        if (result.renamedTargets > 0) {
+            logger.info(`[AnalysisRuntime] 已迁移重命名节点摘要: targets=${result.renamedTargets}, mergedRecords=${result.mergedRecords}`);
+        }
+    }
+
     // 编排调用: 查询全局视图
-    public queryGlobalRelation(relation: EdgeRelation): GraphViewData {
-        return ViewQueryService.queryGlobalRelation(this.projectGraph, relation);
+    public async queryGlobalRelation(relations: EdgeRelation[], includeExternal?: boolean): Promise<GraphViewData> {
+        await this.indexStatusService.waitForSnapshotReady();
+        return this.attachIndexStatus(ViewQueryService.queryGlobalRelation(this.projectGraph, relations, includeExternal));
     }
 
     // 编排调用: 查询节点依赖
-    public queryNodeDependencies(nodeId: string, allowedRelations?: EdgeRelation[]): GraphViewData {
-        return ViewQueryService.queryNodeDependencies(this.projectGraph, nodeId, allowedRelations);
+    public async queryNodeDependencies(nodeId: string, allowedRelations?: EdgeRelation[], includeExternal?: boolean): Promise<GraphViewData> {
+        await this.indexStatusService.waitForSnapshotReady();
+        return this.attachIndexStatus(ViewQueryService.queryNodeDependencies(this.projectGraph, nodeId, allowedRelations, includeExternal));
+    }
+
+    public async queryFunctionCallGraph(
+        nodeId: string,
+        direction?: CallGraphDirection,
+        depth?: number,
+        includeExternal?: boolean,
+        maxNodes?: number,
+        maxEdges?: number
+    ): Promise<GraphViewData> {
+        await this.indexStatusService.waitForSnapshotReady();
+        return this.attachIndexStatus(ViewQueryService.queryFunctionCallGraph(this.projectGraph, nodeId, {
+            direction,
+            depth,
+            includeExternal,
+            maxNodes,
+            maxEdges
+        }));
+    }
+
+    public async queryFunctionCallPath(
+        sourceId: string,
+        targetId: string,
+        direction?: CallGraphDirection,
+        maxDepth?: number,
+        includeExternal?: boolean
+    ): Promise<GraphViewData> {
+        await this.indexStatusService.waitForSnapshotReady();
+        return this.attachIndexStatus(ViewQueryService.queryFunctionCallPath(this.projectGraph, sourceId, targetId, {
+            direction,
+            maxDepth,
+            includeExternal
+        }));
+    }
+
+    public async queryFunctionCallWaypointPath(
+        nodeIds: string[],
+        direction?: CallGraphDirection,
+        maxDepthPerSegment?: number,
+        includeExternal?: boolean
+    ): Promise<GraphViewData> {
+        await this.indexStatusService.waitForSnapshotReady();
+        return this.attachIndexStatus(ViewQueryService.queryFunctionCallWaypointPath(this.projectGraph, nodeIds, {
+            direction,
+            maxDepthPerSegment,
+            includeExternal
+        }));
+    }
+
+    public async resolveFunctionAtEditorPosition(uri: vscode.Uri, position: vscode.Position): Promise<FunctionRef | undefined> {
+        await this.indexStatusService.waitForSnapshotReady();
+
+        return SourceLocationService.resolveFunctionRefAtPosition(this.projectGraph, uri, position, 'editor');
+    }
+
+    public async summarizeFunctionAtEditorPosition(uri: vscode.Uri, position: vscode.Position): Promise<FunctionSummaryData | undefined> {
+        await this.indexStatusService.waitForSnapshotReady();
+
+        const functionRef = await SourceLocationService.resolveFunctionRefAtPosition(this.projectGraph, uri, position, 'editor');
+        if (!functionRef || functionRef.pendingGraphNode) {
+            return undefined;
+        }
+
+        return this.queryFunctionSummary(functionRef.id, false, true, 'debug-command');
+    }
+
+    public async queryFunctionSummary(nodeId: string, forceRefresh: boolean = false, allowGenerate: boolean = true, reason: string = 'unknown'): Promise<FunctionSummaryData> {
+        // logger.info(`[SummaryBackend] backend-cache-query received nodeId=${nodeId}, forceRefresh=${forceRefresh}, allowGenerate=${allowGenerate}, reason=${reason}`);
+        await this.indexStatusService.waitForSnapshotReady();
+        // logger.info(`[SummaryBackend] backend-cache-query snapshot-ready nodeId=${nodeId}, reason=${reason}`);
+        await this.ensureLLMSupportReady();
+        // logger.info(`[SummaryBackend] backend-cache-query llm-support-ready nodeId=${nodeId}, reason=${reason}`);
+
+        const result = await SummaryArrangeService.summarizeFunction(this.projectGraph, nodeId, undefined, {
+            cacheService: this.summaryCacheService,
+            queueService: this.summaryQueueService,
+            modelService: this.llmModelService,
+            forceRefresh,
+            allowGenerate,
+            summaryLanguage: this.getCurrentSummaryLanguage(),
+            summaryConfig: this.summaryRuntimeConfig
+        });
+        // logger.info(`[SummaryBackend] backend-cache-hit completed nodeId=${nodeId}, status=${result.cacheStatus}, stale=${result.stale === true}, model=${result.modelName || result.modelId || '<unknown>'}, reason=${reason}, summaryType=${typeof result.summary}, summaryLength=${String(result.summary || '').length}`);
+        return result;
+    }
+
+    public async queryClassSummary(nodeId: string, forceRefresh: boolean = false, allowGenerate: boolean = true, reason: string = 'unknown'): Promise<ClassSummaryData> {
+        await this.indexStatusService.waitForSnapshotReady();
+        await this.ensureLLMSupportReady();
+
+        const result = await SummaryArrangeService.summarizeClass(this.projectGraph, nodeId, undefined, {
+            cacheService: this.summaryCacheService,
+            queueService: this.summaryQueueService,
+            modelService: this.llmModelService,
+            forceRefresh,
+            allowGenerate,
+            summaryLanguage: this.getCurrentSummaryLanguage(),
+            summaryConfig: this.summaryRuntimeConfig
+        });
+        logger.info(`[SummaryBackend] class-summary-query completed nodeId=${nodeId}, status=${result.cacheStatus}, ownStale=${result.ownStale === true}, relationStale=${result.relationContextStale === true}, reason=${reason}`);
+        return result;
+    }
+
+    public async getFunctionSummaryHistory(nodeId: string, modelName?: string): Promise<{ nodeId: string; records: FunctionSummaryData[] }> {
+        await this.indexStatusService.waitForSnapshotReady();
+        await this.ensureLLMSupportReady();
+        if (!this.summaryCacheService || !this.llmModelService) {
+            return { nodeId, records: [] };
+        }
+
+        const context = await SummaryContextService.buildFunctionContext(this.projectGraph, nodeId);
+        return this.summaryCacheService.getFunctionSummaryHistory({
+            nodeId,
+            modelName,
+            promptVersion: SummaryArrangeService.FUNCTION_PROMPT_VERSION,
+            summaryLanguage: this.getCurrentSummaryLanguage(),
+            currentBodyHash: context.bodyHash
+        });
+    }
+
+    public async ensureFunctionSummariesForDependencies(nodeIds: string[], allowGenerate: boolean = true): Promise<FunctionSummaryDependencyResult> {
+        await this.indexStatusService.waitForSnapshotReady();
+        await this.ensureLLMSupportReady();
+        return SummaryArrangeService.ensureFunctionSummariesForDependencies(this.projectGraph, nodeIds, undefined, {
+            cacheService: this.summaryCacheService,
+            queueService: this.summaryQueueService,
+            modelService: this.llmModelService,
+            allowGenerate,
+            summaryLanguage: this.getCurrentSummaryLanguage(),
+            summaryConfig: this.summaryRuntimeConfig
+        });
+    }
+
+    public async queryFunctionCallPathSummary(
+        graphData: GraphViewData,
+        waypointIds: string[] = [],
+        requestId: string = ''
+    ): Promise<CallPathSummaryResult> {
+        await this.indexStatusService.waitForSnapshotReady();
+        await this.ensureLLMSupportReady();
+        return SummaryArrangeService.summarizeCallPath(this.projectGraph, graphData, undefined, {
+            cacheService: this.summaryCacheService,
+            queueService: this.summaryQueueService,
+            modelService: this.llmModelService,
+            requestId,
+            waypointIds,
+            summaryLanguage: this.getCurrentSummaryLanguage(),
+            summaryConfig: this.summaryRuntimeConfig
+        });
+    }
+
+    public async listLLMModels(): Promise<{ models: LLMModelInfo[]; selectedModelName: string }> {
+        await this.ensureLLMSupportReady();
+        return {
+            models: this.llmModelService?.listModels() || [],
+            selectedModelName: this.llmModelService?.getSelectedModelName() || ''
+        };
+    }
+
+    public async setLLMModel(modelName: string): Promise<{ models: LLMModelInfo[]; selectedModelName: string }> {
+        await this.ensureLLMSupportReady();
+        await this.llmModelService?.setSelectedModelName(modelName);
+        return this.listLLMModels();
+    }
+
+    public async resolveGraphNodeAtEditorPosition(
+        uri: vscode.Uri,
+        position: vscode.Position,
+        allowedTypes: NodeType[] = ['class', 'interface', 'function', 'method']
+    ): Promise<GraphNodeRef | undefined> {
+        return (await this.resolveGraphNodesAtEditorPosition(uri, position, allowedTypes))[0];
+    }
+
+    public async resolveGraphNodesAtEditorPosition(
+        uri: vscode.Uri,
+        position: vscode.Position,
+        allowedTypes: NodeType[] = ['class', 'interface', 'function', 'method']
+    ): Promise<GraphNodeRef[]> {
+        await this.indexStatusService.waitForSnapshotReady();
+
+        return SourceLocationService.resolveGraphNodeRefsAtPosition(this.projectGraph, uri, position, allowedTypes);
+    }
+
+    public async revealSourceLocation(target: SourceLocationTarget): Promise<boolean> {
+        await this.indexStatusService.waitForSnapshotReady();
+        return SourceLocationService.revealSourceLocation(this.projectGraph, target);
+    }
+
+    /**
+     * 公共接口：清空图并重建
+     * 用于用户主动触发的完整图重置和重新扫描场景
+     */
+    public async clearAndRebuildGraph(): Promise<void> {
+        logger.info('[AnalysisRuntime] 清空图并准备重建...');
+        this.analysisGeneration++;
+
+        // 1. 清空内存图结构
+        this.projectGraph.clearAll();
+
+        // 2. 清空本地持久化索引与历史图快照、遗留任务，防止旧指纹复活干扰分析
+        if (this.syncService) {
+            await this.syncService.clearIndex();
+            await this.syncService.saveSnapshot(this.projectGraph);
+            this.syncService.savePendingTasksSync([]);
+            logger.info('[AnalysisRuntime] 本地索引、遗留任务及历史快照已清零');
+        }
+
+        // 3. 清空任务队列，取消待处理删除
+        this.graphQueue.clear();
+        for (const timer of this.pendingDeletions.values()) {
+            clearTimeout(timer);
+        }
+        this.pendingDeletions.clear();
+        logger.info('[AnalysisRuntime] 任务队列已清空');
+
+        // 4. 重新初始化快照就绪状态
+        this.resetSnapshotReadyPromise();
+
+        // 5. 触发完整重新扫描和增量同步
+        logger.info('[AnalysisRuntime] 开始重新扫描工作区...');
+        await this.runIncrementalSync();
+        logger.info('[AnalysisRuntime] 图重建完成！');
+    }
+
+    private resetSnapshotReadyPromise(): void {
+        this.indexStatusService.resetSnapshotReady();
+        this.emitIndexStatus();
+    }
+
+    private initializeLLMSupport(summaryStorageDir: string, llmModelStorageDir: string): void {
+        const configuration = vscode.workspace.getConfiguration('forwarder.llm');
+        const summaryConfig = SummaryConfigService.read(configuration);
+        this.summaryRuntimeConfig = summaryConfig;
+        const defaultModelName = String(configuration.get('defaultModelName', '') || '');
+
+        this.summaryStorageService = new SummaryStorageService(summaryStorageDir);
+        this.summaryCacheService = new SummaryCacheService(this.summaryStorageService, {
+            historyLimit: summaryConfig.history.limit
+        });
+        this.summaryQueueService = new SummaryQueueService(summaryConfig.queue.concurrency);
+        this.llmModelService = new LLMModelService({
+            storageDir: llmModelStorageDir,
+            configuredDefaultModelName: defaultModelName
+        });
+
+        this.llmInitialization = (async () => {
+            await this.summaryStorageService!.initialize();
+            await this.llmModelService!.initialize();
+            logger.info(`[AnalysisRuntime] LLM support ready: summaryStorageDir=${summaryStorageDir}, llmModelStorageDir=${llmModelStorageDir}, summaryIndex=${this.summaryStorageService!.getIndexPath()}, concurrency=${summaryConfig.queue.concurrency}`);
+        })().catch(error => {
+            logger.warn(`[AnalysisRuntime] LLM support initialization failed: ${error?.message || error}`);
+            throw error;
+        });
+    }
+
+    private async ensureLLMSupportReady(): Promise<void> {
+        if (!this.llmInitialization) {
+            throw new Error('LLM support is not initialized.');
+        }
+        await this.llmInitialization;
+    }
+
+    private getCurrentSummaryLanguage(): SummaryLanguage {
+        const configuredValue = vscode.workspace.getConfiguration('forwarder.ui').get('language', 'auto');
+        return PromptLanguageService.resolveSummaryLanguage(configuredValue, vscode.env.language);
     }
 
     /**
@@ -410,36 +711,9 @@ export class AnalysisRuntime {
      */
     public dispose(): void {
         // 插件退出前立刻同步保存未完成及未固化的任务
-        const leftoverTasksMap = new Map<string, AnalysisTask>();
-        // 1. 先载入所有已处理但未固化到快照的任务
-        for (const task of this.uncommittedTasks.values()) {
-            leftoverTasksMap.set(task.uri.toString(), task);
-        }
-        // 2. 叠加上尚未处理的队列任务，若同名且新任务级联级别更高则提权
-        for (const task of this.taskQueue) {
-            const existing = leftoverTasksMap.get(task.uri.toString());
-            if (existing && task.cascade) {
-                existing.cascade = true;
-            } else if (!existing) {
-                leftoverTasksMap.set(task.uri.toString(), task);
-            }
-        }
-        // 3. 加上当前刚好正在被执行的任务
-        if (this.activeTask) {
-            const key = this.activeTask.uri.toString();
-            if (!leftoverTasksMap.has(key)) {
-                leftoverTasksMap.set(key, this.activeTask);
-            }
-        }
-
-        const leftoverTasks = Array.from(leftoverTasksMap.values());
+        const leftoverTasks = this.graphQueue.getSerializableTasks();
         if (leftoverTasks.length > 0 && this.syncService) {
-            const pendingData = leftoverTasks.map(t => ({
-                uriStr: t.uri.toString(),
-                reason: t.reason,
-                cascade: t.cascade
-            }));
-            this.syncService.savePendingTasksSync(pendingData);
+            this.syncService.savePendingTasksSync(leftoverTasks);
         }
 
         if (this.configChangeListener) {
