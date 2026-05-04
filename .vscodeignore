@@ -12,3 +12,7 @@ vsc-extension-quickstart.md
 **/*.map
 **/*.ts
 **/.vscode-test.*
+patches/**
+media/initial/**
+TODO.md
+.github/**
