@@ -4,7 +4,7 @@ English | [中文](README-zh.md)
 
 Forwarder is a VS Code extension for code understanding. It uses VS Code language services to analyze relationships among classes, interfaces, functions, and methods, then renders interactive class graphs, call graphs, and call paths in the side bar. It can also generate AI summaries for key nodes via the VS Code Language Model API.
 
-![Forwarder Overview](images/forwarder-overview.png)
+![Forwarder Overview](media/images/forwarder-overview.png)
 
 ## What it's good for
 
@@ -33,7 +33,7 @@ Supported relationship types:
 
 When you click a class or interface node, Forwarder shows a center card with the type's fields and methods. Method entries can reveal source locations and can be added to the call path tray.
 
-![Class Graph](images/forwarder-class-graph.png)
+![Class Graph](media/images/forwarder-class-graph.png)
 
 ### Call graph
 
@@ -47,7 +47,7 @@ Call Graph supports:
 - Jumping from nodes back to source code.
 - Adding nodes to the ordered call path.
 
-![Call Graph](images/forwarder-call-graph.png)
+![Call Graph](media/images/forwarder-call-graph.png)
 
 ### Ordered call path
 
@@ -58,7 +58,7 @@ Forwarder provides a shared call path tray. You can add functions to it from edi
 - If a segment cannot be connected, the result keeps failure segment details to help identify where the break happens.
 - You can generate a path summary based on the result to understand what the call chain does.
 
-![Call Path](images/forwarder-call-path.png)
+![Call Path](media/images/forwarder-call-path.png)
 
 ### AI summaries
 
@@ -75,7 +75,7 @@ Current capabilities:
 
 If a node has no summary, hover will not automatically trigger a model request. Long-press a function/method/class/interface node to trigger summary generation. Hovering a node that already has a summary shows the summary popover.
 
-![AI Summary](images/forwarder-summary.png)
+![AI Summary](media/images/forwarder-summary.png)
 
 ## Prerequisites
 
@@ -190,7 +190,7 @@ Summary data is stored separately from graph snapshots. Summary bodies are loade
 - AI summaries require an available VS Code Language Model Chat model. Model permissions/quotas/network/Copilot sign-in issues can prevent summary generation.
 - Call path summaries are still early; when paths are incomplete, summaries are missing, or summaries are stale, generated content may be conservative.
 - Several debug commands are still included for diagnosing LSP/graph/query/summary flows; most users do not need them.
-- Export features (images/UML formats) and project-wide Q&A are not available yet.
+- Export features (media/images/UML formats) and project-wide Q&A are not available yet.
 
 ## Roadmap
 
