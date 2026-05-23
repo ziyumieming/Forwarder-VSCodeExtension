@@ -364,6 +364,18 @@ export class SummaryArrangeService {
                 summaries.push(summary);
                 missingNodeIds.delete(summary.nodeId);
             }
+            for (const nodeId of batch.missingNodeIds) {
+                const node = graph.getNode(nodeId);
+                if (!node || (node.type !== 'function' && node.type !== 'method')) {
+                    continue;
+                }
+                const summary = await this.summarizeFunction(graph, nodeId, llmClient, {
+                    ...options,
+                    promptVersion: this.FUNCTION_PROMPT_VERSION
+                });
+                summaries.push(summary);
+                missingNodeIds.delete(summary.nodeId);
+            }
         }
 
         return {
@@ -459,6 +471,26 @@ export class SummaryArrangeService {
         const modelId = selectedModel?.id;
         const summaryLanguage = this.resolveSummaryLanguage(options);
         const baseContext = await SummaryContextService.buildClassContext(graph, nodeId);
+        const promptVersion = options.promptVersion || this.CLASS_PROMPT_VERSION;
+
+        if (options.allowGenerate === false) {
+            if (options.cacheService) {
+                const cached = await options.cacheService.lookupSummary({
+                    nodeId,
+                    targetKind: 'class',
+                    modelName,
+                    promptVersion,
+                    summaryLanguage,
+                    currentBodyHash: baseContext.ownContextHash,
+                    currentRelationContextHash: baseContext.relationContextHash
+                });
+                if (cached) {
+                    return cached as ClassSummaryData;
+                }
+            }
+            throw new SummaryCacheMissError(nodeId, modelName, promptVersion);
+        }
+
         const methodSummaries = await this.ensureFreshFunctionSummariesForDependencies(
             graph,
             baseContext.methods.map(method => method.id),
@@ -472,7 +504,6 @@ export class SummaryArrangeService {
             methodSummaries,
             relatedBriefs
         });
-        const promptVersion = options.promptVersion || this.CLASS_PROMPT_VERSION;
 
         if (options.cacheService && !options.forceRefresh) {
             const cached = await options.cacheService.lookupSummary({
@@ -487,10 +518,6 @@ export class SummaryArrangeService {
             if (cached) {
                 return cached as ClassSummaryData;
             }
-        }
-
-        if (options.allowGenerate === false) {
-            throw new SummaryCacheMissError(nodeId, modelName, promptVersion);
         }
 
         const generate = async (): Promise<ClassSummaryData> => {
@@ -659,6 +686,17 @@ export class SummaryArrangeService {
                 forceRefresh: true
             });
             refreshed.push(...batch.generated);
+            for (const nodeId of batch.missingNodeIds) {
+                const node = graph.getNode(nodeId);
+                if (!node || (node.type !== 'function' && node.type !== 'method')) {
+                    continue;
+                }
+                refreshed.push(await this.summarizeFunction(graph, nodeId, llmClient, {
+                    ...options,
+                    promptVersion: this.FUNCTION_PROMPT_VERSION,
+                    forceRefresh: true
+                }));
+            }
         }
         return refreshed;
     }

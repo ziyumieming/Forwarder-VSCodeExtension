@@ -4,4 +4,5 @@ node_modules
 .vscode-test/
 *.vsix
 src/test
-.github
+paper.md
+draft.md
