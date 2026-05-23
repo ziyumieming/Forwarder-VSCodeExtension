@@ -13,3 +13,6 @@ All notable changes to the "Forwarder" extension will be documented in this file
 
 ## [0.0.2]
 - Fix the issue of missing non-batch functions in the summary query of repair-related nodes.
+
+## [0.0.3]
+- No function improvement. Just use it to test the workflow procedure.
